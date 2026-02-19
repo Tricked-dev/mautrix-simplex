@@ -113,6 +113,14 @@ func (s *SimplexClient) handleSimplexEvent(ctx context.Context, evt simplexclien
 		}
 		s.handleGroupUpdated(ctx, data)
 
+	case "rcvFileDescrReady":
+		var data simplexclient.RcvFileDescrReadyEvent
+		if err := json.Unmarshal(evt.Raw, &data); err != nil {
+			log.Err(err).Msg("Failed to unmarshal rcvFileDescrReady event")
+			return
+		}
+		s.handleRcvFileDescrReady(ctx, data)
+
 	case "rcvFileComplete":
 		var data simplexclient.RcvFileCompleteEvent
 		if err := json.Unmarshal(evt.Raw, &data); err != nil {
@@ -133,6 +141,9 @@ func (s *SimplexClient) handleSimplexEvent(ctx context.Context, evt simplexclien
 		}
 		s.handleReceivedContactRequest(ctx, data)
 
+	case "chatError":
+		log.Warn().RawJSON("error_data", evt.Raw).Msg("SimpleX chat error event")
+
 	default:
 		log.Debug().Str("event_type", evt.Type).Msg("Unhandled SimpleX event type")
 	}
@@ -142,6 +153,17 @@ func (s *SimplexClient) handleSimplexEvent(ctx context.Context, evt simplexclien
 func (s *SimplexClient) handleNewChatItems(ctx context.Context, data simplexclient.NewChatItemsEvent) {
 	for _, aci := range data.ChatItems {
 		item := aci.ChatItem
+
+		// Skip file messages where the file hasn't been downloaded yet.
+		// The rcvFileComplete event will re-trigger this handler once the file is ready.
+		if item.File != nil && item.File.GetFilePath() == "" {
+			zerolog.Ctx(ctx).Debug().
+				Int64("item_id", item.Meta.ItemID).
+				Str("file_name", item.File.FileName).
+				Msg("Skipping chat item with pending file download, waiting for rcvFileComplete")
+			continue
+		}
+
 		portalKey := s.makePortalKeyFromChatInfo(aci.ChatInfo)
 		sender := s.makeEventSenderFromDir(item.ChatDir)
 
@@ -181,6 +203,7 @@ func (s *SimplexClient) handleNewChatItems(ctx context.Context, data simplexclie
 				for _, part := range cm.Parts {
 					if filePath, ok := part.Extra["fi.mau.simplex.file_path"].(string); ok {
 						delete(part.Extra, "fi.mau.simplex.file_path")
+						filePath = s.resolveSimplexFilePath(filePath)
 						if err := uploadFilePartToMatrix(ctx, portal, intent, part, filePath); err != nil {
 							zerolog.Ctx(ctx).Err(err).Str("file_path", filePath).Msg("Failed to upload file to Matrix")
 							part.Content = &event.MessageEventContent{
@@ -221,7 +244,7 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 	}
 
 	// If there is a file attached and it has been downloaded (FilePath set), convert it.
-	if item.File != nil && item.File.FilePath != nil {
+	if item.File != nil && item.File.GetFilePath() != "" {
 		return &bridgev2.ConvertedMessage{
 			Parts: []*bridgev2.ConvertedMessagePart{{
 				ID:   networkid.PartID("file"),
@@ -234,7 +257,7 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 					},
 				},
 				Extra: map[string]any{
-					"fi.mau.simplex.file_path": *item.File.FilePath,
+					"fi.mau.simplex.file_path": item.File.GetFilePath(),
 				},
 			}},
 		}
@@ -289,6 +312,7 @@ func (s *SimplexClient) handleChatItemUpdated(ctx context.Context, data simplexc
 			for i, p := range cm.Parts {
 				if filePath, ok := p.Extra["fi.mau.simplex.file_path"].(string); ok {
 					delete(p.Extra, "fi.mau.simplex.file_path")
+					filePath = s.resolveSimplexFilePath(filePath)
 					if err := uploadFilePartToMatrix(ctx, portal, intent, p, filePath); err != nil {
 						zerolog.Ctx(ctx).Err(err).Str("file_path", filePath).Msg("Failed to upload file to Matrix (edit)")
 					}
@@ -343,14 +367,31 @@ func (s *SimplexClient) handleChatItemReaction(ctx context.Context, data simplex
 	}
 
 	portalKey := s.makePortalKeyFromChatInfo(reaction.ChatInfo)
-	// We don't have the target chat item ID in ACIReaction, so we can't queue a
-	// proper reaction event without more data. Log and skip for now.
-	zerolog.Ctx(ctx).Debug().
-		Bool("added", data.Added).
-		Str("emoji", reaction.Reaction.Emoji).
-		Str("portal", string(portalKey.ID)).
-		Str("sender", string(sender.Sender)).
-		Msg("Received reaction event (not yet mapped to target message)")
+	targetMsgID := simplexid.MakeMessageID(reaction.ChatReaction.ChatItem.Meta.ItemID)
+	emoji := reaction.ChatReaction.Reaction.Emoji
+
+	var evtType bridgev2.RemoteEventType
+	if data.Added {
+		evtType = bridgev2.RemoteEventReaction
+	} else {
+		evtType = bridgev2.RemoteEventReactionRemove
+	}
+
+	s.UserLogin.QueueRemoteEvent(&simplevent.Reaction{
+		EventMeta: simplevent.EventMeta{
+			Type: evtType,
+			LogContext: func(c zerolog.Context) zerolog.Context {
+				return c.
+					Str("emoji", emoji).
+					Int64("target_item_id", reaction.ChatReaction.ChatItem.Meta.ItemID)
+			},
+			PortalKey: portalKey,
+			Sender:    sender,
+			Timestamp: time.Now(),
+		},
+		TargetMessage: targetMsgID,
+		Emoji:         emoji,
+	})
 }
 
 // handleReceivedContactRequest auto-accepts incoming contact requests.
@@ -457,6 +498,21 @@ func (s *SimplexClient) handleGroupUpdated(ctx context.Context, data simplexclie
 		},
 		GetChatInfoFunc: s.GetChatInfo,
 	})
+}
+
+// handleRcvFileDescrReady auto-accepts incoming file downloads so they proceed to rcvFileComplete.
+func (s *SimplexClient) handleRcvFileDescrReady(ctx context.Context, data simplexclient.RcvFileDescrReadyEvent) {
+	log := zerolog.Ctx(ctx)
+	fileID := data.RcvFileTransfer.FileID
+	log.Info().
+		Int64("file_id", fileID).
+		Str("file_name", data.RcvFileTransfer.FileName).
+		Int64("file_size", data.RcvFileTransfer.FileSize).
+		Msg("Auto-accepting incoming file download")
+
+	if err := s.Client.ReceiveFile(fileID); err != nil {
+		log.Err(err).Int64("file_id", fileID).Msg("Failed to auto-accept file download")
+	}
 }
 
 // syncChats creates/updates portals for all existing contacts and groups.
@@ -585,6 +641,21 @@ func isVideoMime(mime string) bool {
 		return true
 	}
 	return false
+}
+
+// resolveSimplexFilePath resolves a potentially relative file path from SimpleX
+// to an absolute path using the configured files folder.
+func (s *SimplexClient) resolveSimplexFilePath(filePath string) string {
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	filesFolder := s.Main.Config.FilesFolder
+	if filesFolder == "" {
+		// Default simplex-chat downloads location
+		home, _ := os.UserHomeDir()
+		filesFolder = filepath.Join(home, "Downloads")
+	}
+	return filepath.Join(filesFolder, filePath)
 }
 
 func isAudioMime(mime string) bool {

@@ -359,6 +359,19 @@ func (c *Client) JoinGroup(groupID int64) (*GroupInfo, error) {
 	return &r.GroupInfo, nil
 }
 
+// ReceiveFile accepts and starts downloading a file
+func (c *Client) ReceiveFile(fileID int64) error {
+	cmd := fmt.Sprintf("/freceive %d approved_relays=on", fileID)
+	respType, _, err := c.sendCmd(cmd)
+	if err != nil {
+		return err
+	}
+	if respType != "rcvFileAccepted" && respType != "rcvFileAcceptedSndCancelled" {
+		return fmt.Errorf("unexpected response type: %s", respType)
+	}
+	return nil
+}
+
 // UpdateGroupProfile updates a group's profile
 func (c *Client) UpdateGroupProfile(groupID int64, profile GroupProfile) (*GroupInfo, error) {
 	profileJSON, err := json.Marshal(profile)

@@ -1,2 +1,5 @@
 displayname_template: "{{.DisplayName}} (SimpleX)"
 simplex_binary: "simplex-chat"
+# The folder where simplex-chat stores received files (must match --files-folder flag).
+# If empty, defaults to ~/Downloads.
+files_folder: ""

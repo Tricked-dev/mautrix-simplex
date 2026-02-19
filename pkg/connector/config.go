@@ -34,6 +34,9 @@ type SimplexConfig struct {
 	DisplaynameTemplate string `yaml:"displayname_template"`
 	// SimplexBinary is the path to the simplex-chat binary (for managed mode).
 	SimplexBinary string `yaml:"simplex_binary"`
+	// FilesFolder is the folder where simplex-chat stores received files.
+	// Must match the --files-folder flag passed to simplex-chat.
+	FilesFolder string `yaml:"files_folder"`
 
 	displaynameTemplate *template.Template `yaml:"-"`
 }
@@ -76,6 +79,7 @@ func (c *SimplexConfig) FormatDisplayname(displayName string, contactID int64) s
 func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "displayname_template")
 	helper.Copy(up.Str, "simplex_binary")
+	helper.Copy(up.Str, "files_folder")
 }
 
 func (s *SimplexConnector) GetConfig() (string, any, up.Upgrader) {

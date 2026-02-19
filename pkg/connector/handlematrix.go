@@ -33,6 +33,33 @@ import (
 	"go.mau.fi/mautrix-simplex/pkg/simplexid"
 )
 
+// simplexSupportedEmojis maps emoji (with and without variant selectors) to the
+// single-character emoji that SimpleX accepts. SimpleX only supports these 8 emojis:
+// 👍👎😀😂😢❤🚀✅
+var simplexSupportedEmojis = map[string]string{
+	"👍":  "👍",
+	"👍️": "👍",
+	"👎":  "👎",
+	"👎️": "👎",
+	"😀":  "😀",
+	"😂":  "😂",
+	"😢":  "😢",
+	"❤":   "❤",
+	"❤️":  "❤",
+	"🚀":  "🚀",
+	"✅":  "✅",
+	"✅️": "✅",
+}
+
+// normalizeEmojiForSimplex converts a Matrix emoji to a SimpleX-compatible one.
+// Returns the emoji and true if supported, or empty and false if not.
+func normalizeEmojiForSimplex(emoji string) (string, bool) {
+	if mapped, ok := simplexSupportedEmojis[emoji]; ok {
+		return mapped, true
+	}
+	return "", false
+}
+
 var (
 	_ bridgev2.EditHandlingNetworkAPI      = (*SimplexClient)(nil)
 	_ bridgev2.ReactionHandlingNetworkAPI  = (*SimplexClient)(nil)
@@ -198,6 +225,11 @@ func (s *SimplexClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.
 	if s.Client == nil {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
+	emoji, ok := normalizeEmojiForSimplex(msg.PreHandleResp.Emoji)
+	if !ok {
+		// SimpleX only supports 8 specific emojis — silently ignore unsupported ones.
+		return &database.Reaction{}, nil
+	}
 	chatType, chatID, err := simplexid.ParsePortalID(msg.Portal.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse portal ID: %w", err)
@@ -206,7 +238,7 @@ func (s *SimplexClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse message ID: %w", err)
 	}
-	err = s.Client.ReactToChatItem(chatType, chatID, itemID, msg.PreHandleResp.Emoji, true)
+	err = s.Client.ReactToChatItem(chatType, chatID, itemID, emoji, true)
 	if err != nil {
 		return nil, err
 	}

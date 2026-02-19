@@ -1,0 +1,28 @@
+services:
+  simplex-chat:
+    image: simplexchat/simplex-chat:latest
+    command:
+      - -p
+      - "5225"
+      - --files-folder
+      - /data/files
+      - --temp-folder
+      - /data/files/tmp
+    volumes:
+      - simplex-data:/data
+    restart: unless-stopped
+
+  mautrix-simplex:
+    build: .
+    depends_on:
+      - simplex-chat
+    volumes:
+      - bridge-data:/data
+      - simplex-data:/simplex-data:ro
+    ports:
+      - "29340:29340"
+    restart: unless-stopped
+
+volumes:
+  simplex-data:
+  bridge-data:

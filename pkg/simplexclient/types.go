@@ -216,7 +216,19 @@ type CIFile struct {
 	FileName   string          `json:"fileName"`
 	FileSize   int64           `json:"fileSize"`
 	FilePath   *string         `json:"filePath,omitempty"`
+	FileSource *CryptoFile     `json:"fileSource,omitempty"`
 	FileStatus json.RawMessage `json:"fileStatus"`
+}
+
+// GetFilePath returns the resolved file path from either FilePath or FileSource.
+func (f *CIFile) GetFilePath() string {
+	if f.FilePath != nil && *f.FilePath != "" {
+		return *f.FilePath
+	}
+	if f.FileSource != nil && f.FileSource.FilePath != "" {
+		return f.FileSource.FilePath
+	}
+	return ""
 }
 
 // ChatItem represents a message
@@ -304,15 +316,17 @@ type ChatItemDeletion struct {
 
 // CIReaction represents an emoji reaction event
 type CIReaction struct {
-	Reaction   MsgReaction `json:"reaction"`
-	ReactionAt string      `json:"reactionAt"`
+	ChatDir    *ChatItemDir `json:"chatDir,omitempty"`
+	ChatItem   ChatItem     `json:"chatItem"`
+	SentAt     string       `json:"sentAt"`
+	Reaction   MsgReaction  `json:"reaction"`
+	ReactionAt string       `json:"reactionAt"`
 }
 
 // ACIReaction wraps a reaction with chat info
 type ACIReaction struct {
 	ChatInfo     ChatInfo     `json:"chatInfo"`
 	ChatReaction CIReaction   `json:"chatReaction"`
-	Reaction     MsgReaction  `json:"reaction"`
 	FromMember   *GroupMember `json:"fromMember,omitempty"`
 	FromContact  *Contact     `json:"fromContact,omitempty"`
 }
@@ -429,6 +443,17 @@ type ReceivedGroupInvitationEvent struct {
 type RcvFileCompleteEvent struct {
 	User     User      `json:"user"`
 	ChatItem AChatItem `json:"chatItem"`
+}
+
+// RcvFileDescrReadyEvent represents a file ready to be accepted for download
+type RcvFileDescrReadyEvent struct {
+	User            User      `json:"user"`
+	ChatItem        AChatItem `json:"chatItem"`
+	RcvFileTransfer struct {
+		FileID   int64  `json:"fileId"`
+		FileName string `json:"fileName"`
+		FileSize int64  `json:"fileSize"`
+	} `json:"rcvFileTransfer"`
 }
 
 // ReceivedContactRequestEvent represents an incoming contact request

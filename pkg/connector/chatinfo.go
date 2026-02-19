@@ -205,16 +205,17 @@ func (s *SimplexClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse user ID: %w", err)
 	}
-	if contactID == -1 {
-		// Member-only ID, no contact info available
-		return &bridgev2.UserInfo{}, nil
-	}
 	if s.Client == nil {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
 	loginID, err := simplexid.ParseUserLoginID(s.UserLogin.ID)
 	if err != nil {
 		return nil, err
+	}
+	if contactID == -1 {
+		// Member-only ID (m:<memberID>) — search groups to find the member profile.
+		memberIDStr := strings.TrimPrefix(string(ghost.ID), "m:")
+		return s.getMemberUserInfo(loginID, memberIDStr)
 	}
 	contacts, err := s.Client.ListContacts(loginID)
 	if err != nil {
@@ -223,6 +224,26 @@ func (s *SimplexClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) 
 	for _, contact := range contacts {
 		if contact.ContactID == contactID {
 			return s.contactToUserInfo(&contact), nil
+		}
+	}
+	return &bridgev2.UserInfo{}, nil
+}
+
+// getMemberUserInfo finds a group member by their member ID string and returns their user info.
+func (s *SimplexClient) getMemberUserInfo(loginID int64, memberIDStr string) (*bridgev2.UserInfo, error) {
+	groups, err := s.Client.ListGroups(loginID)
+	if err != nil {
+		return &bridgev2.UserInfo{}, nil
+	}
+	for _, group := range groups {
+		members, err := s.Client.ListMembers(group.GroupID)
+		if err != nil {
+			continue
+		}
+		for _, m := range members {
+			if m.MemberID == memberIDStr {
+				return s.memberToUserInfo(&m), nil
+			}
 		}
 	}
 	return &bridgev2.UserInfo{}, nil
@@ -278,8 +299,19 @@ func (s *SimplexClient) memberToUserInfo(member *simplexclient.GroupMember) *bri
 		name = member.LocalDisplayName
 	}
 	isBot := false
-	return &bridgev2.UserInfo{
+	ui := &bridgev2.UserInfo{
 		Name:  &name,
 		IsBot: &isBot,
 	}
+	if member.Profile.Image != nil && *member.Profile.Image != "" {
+		imageData := *member.Profile.Image
+		avatarID := networkid.AvatarID("member:" + member.MemberID)
+		ui.Avatar = &bridgev2.Avatar{
+			ID: avatarID,
+			Get: func(ctx context.Context) ([]byte, error) {
+				return decodeDataURI(imageData)
+			},
+		}
+	}
+	return ui
 }
