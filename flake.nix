@@ -22,12 +22,13 @@
           inherit system;
           config.permittedInsecurePackages = [ "olm-3.2.16" ];
         };
+        simplex-chat = pkgs.callPackage ./nix/simplex-chat.nix { };
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
       in
       {
         packages = {
-          inherit mautrix-simplex bbctl;
+          inherit mautrix-simplex simplex-chat bbctl;
           default = mautrix-simplex;
         };
 

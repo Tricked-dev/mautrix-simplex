@@ -121,22 +121,108 @@ A NixOS module is provided via the flake:
   imports = [ inputs.mautrix-simplex.nixosModules.default ];
 
   services.mautrix-simplex = {
+    # Enable the bridge and companion simplex-chat service.
     enable = true;
+
+    # Matrix user ID of the bridge owner. Only this user gets admin access,
+    # everyone else is blocked. Set to null to configure permissions manually.
+    owner = "@alice:example.com";
+
+    # Override the mautrix-simplex package (defaults to the flake's package).
+    # package = pkgs.mautrix-simplex;
+
+    # The simplex-chat package for the companion service.
+    # Defaults to the bundled binary from the flake.
+    # simplexChatPackage = inputs.mautrix-simplex.packages.${pkgs.system}.simplex-chat;
+
+    # Base directory for all state (database, simplex-chat data, files).
+    # Defaults to /var/lib/mautrix-simplex.
+    dataDir = "/var/lib/selfhosted/matrix/mautrix-simplex";
+
+    # Port for the companion simplex-chat WebSocket API (default: 5225).
+    simplexChatPort = 5225;
+
+    # Directory for simplex-chat file storage (default: ${dataDir}/files).
+    # Must be on the same filesystem as the temp folder.
+    filesFolder = "/var/lib/selfhosted/matrix/mautrix-simplex/files";
+
+    # Whether to automatically register the appservice with Synapse.
+    # Defaults to true when services.matrix-synapse is enabled.
+    registerToSynapse = true;
+
+    # Extra systemd units to wait for before starting the bridge.
+    # Defaults to [ matrix-synapse.service ] when Synapse is enabled.
+    # serviceDependencies = [];
+
+    # Bridge configuration, converted to YAML. All mautrix-go bridgev2 config
+    # options are available here. The module sets sensible defaults for most fields.
     settings = {
-      homeserver.address = "http://localhost:8008";
-      homeserver.domain = "example.com";
+      # Homeserver connection.
+      homeserver = {
+        address = "http://localhost:8008";
+        domain = "example.com";
+        # software = "standard";   # or "hungry" for hungryserv
+        # websocket = false;       # set true for Beeper
+      };
+
+      # Appservice registration (tokens are required).
+      appservice = {
+        # database.type = "sqlite3-fk-wal";
+        # database.uri = "${dataDir}/mautrix-simplex.db"; # auto-set from dataDir
+        # id = "simplex";
+        # bot.username = "simplexbot";
+        # bot.displayname = "SimpleX Bridge Bot";
+        as_token = ""; # fill in after registration
+        hs_token = ""; # fill in after registration
+      };
+
+      bridge = {
+        # command_prefix = "!simplex";
+
+        # When owner is set, permissions are auto-configured. Otherwise set manually:
+        # permissions = {
+        #   "*" = "block";
+        #   "@alice:example.com" = "admin";
+        #   "@bob:example.com" = "user";    # can use but not admin
+        #   "example.com" = "relay";         # whole domain gets relay access
+        # };
+      };
+
+      # Network-specific config for the SimpleX connector.
       network = {
-        displayname_template = "{{.DisplayName}} (SimpleX)";
-        files_folder = "/var/lib/mautrix-simplex/files";
+        # Go template for ghost display names.
+        # displayname_template = "{{.DisplayName}} (SimpleX)";
+
+        # Path to simplex-chat binary (auto-set from simplexChatPackage).
+        # simplex_binary = "/path/to/simplex-chat";
+
+        # File folder (auto-set from filesFolder option).
+        # files_folder = "/path/to/files";
       };
     };
   };
 }
 ```
 
+### Options reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enable` | bool | `false` | Enable the bridge and companion simplex-chat service |
+| `owner` | string or null | `null` | Matrix ID of sole user; blocks everyone else when set |
+| `package` | package | flake default | The mautrix-simplex package |
+| `simplexChatPackage` | package | bundled binary | The simplex-chat package for the companion service |
+| `dataDir` | string | `/var/lib/mautrix-simplex` | Base directory for all state |
+| `simplexChatPort` | port | `5225` | WebSocket API port for simplex-chat |
+| `filesFolder` | string | `${dataDir}/files` | simplex-chat file storage directory |
+| `registerToSynapse` | bool | auto | Auto-register appservice with Synapse |
+| `serviceDependencies` | list of strings | auto | Systemd units to wait for |
+| `settings` | attrset | _(see above)_ | Full bridge config (converted to YAML) |
+
 The module automatically:
-- Runs a companion simplex-chat systemd service
+- Runs a companion simplex-chat systemd service (localhost-only WebSocket)
 - Manages state directories and file permissions
+- Uses DynamicUser when dataDir is under `/var/lib/`, static user otherwise
 - Generates the appservice registration file
 
 ## Beeper
@@ -201,6 +287,7 @@ The flake includes `bbctl` as a package. Here's a full NixOS config for running 
 
   services.mautrix-simplex = {
     enable = true;
+    owner = "@you:beeper.local"; # restrict to your Beeper account
     dataDir = "/var/lib/selfhosted/matrix/mautrix-simplex"; # optional, custom base path
 
     settings = {
@@ -208,9 +295,6 @@ The flake includes `bbctl` as a package. Here's a full NixOS config for running 
         websocket = true;
         address = "https://matrix.beeper.com";
         domain = "beeper.local";
-      };
-      network = {
-        displayname_template = "{{.DisplayName}} (SimpleX)";
       };
     };
   };

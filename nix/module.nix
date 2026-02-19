@@ -18,6 +18,8 @@ in
 
     simplexChatPackage = lib.mkOption {
       type = lib.types.package;
+      default = pkgs.callPackage ./simplex-chat.nix { };
+      defaultText = lib.literalExpression "pkgs.callPackage ./simplex-chat.nix { }";
       description = "The simplex-chat package to use for the companion service.";
     };
 
@@ -65,6 +67,17 @@ in
       defaultText = lib.literalExpression ''"''${cfg.dataDir}/files"'';
       description = "Directory for simplex-chat file storage. Must match the network.files_folder config.";
     };
+
+    owner = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "@alice:example.com";
+      description = ''
+        Matrix user ID of the bridge owner. When set, only this user gets admin
+        access and everyone else is blocked. When null, you must configure
+        bridge.permissions manually in settings.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -85,8 +98,12 @@ in
         as_token = "";
         hs_token = "";
       };
-      bridge = lib.mkDefault {
-        command_prefix = "!simplex";
+      bridge = {
+        command_prefix = lib.mkDefault "!simplex";
+        permissions = lib.mkIf (cfg.owner != null) (lib.mkDefault {
+          "*" = "block";
+          ${cfg.owner} = "admin";
+        });
       };
       network = {
         displayname_template = lib.mkDefault "{{.DisplayName}} (SimpleX)";
