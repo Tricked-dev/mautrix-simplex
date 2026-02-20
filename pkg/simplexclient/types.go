@@ -118,7 +118,7 @@ type GroupMember struct {
 	MemberCategory   string          `json:"memberCategory"`
 	MemberStatus     string          `json:"memberStatus"`
 	LocalDisplayName string          `json:"localDisplayName"`
-	Profile          Profile         `json:"profile"`
+	Profile          Profile         `json:"memberProfile"`
 	ContactID        *int64          `json:"contactId,omitempty"`
 }
 

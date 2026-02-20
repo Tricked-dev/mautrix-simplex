@@ -183,7 +183,7 @@ func (s *SimplexClient) groupToChatInfo(group *simplexclient.GroupInfo, members 
 		MemberMap: memberMap,
 	}
 
-	return &bridgev2.ChatInfo{
+	ci := &bridgev2.ChatInfo{
 		Name:    &name,
 		Topic:   &topic,
 		Members: chatMembers,
@@ -197,6 +197,17 @@ func (s *SimplexClient) groupToChatInfo(group *simplexclient.GroupInfo, members 
 			return false
 		},
 	}
+	if group.GroupProfile.Image != nil && *group.GroupProfile.Image != "" {
+		imageData := *group.GroupProfile.Image
+		avatarID := networkid.AvatarID("group:" + fmt.Sprintf("%d", group.GroupID))
+		ci.Avatar = &bridgev2.Avatar{
+			ID: avatarID,
+			Get: func(ctx context.Context) ([]byte, error) {
+				return decodeDataURI(imageData)
+			},
+		}
+	}
+	return ci
 }
 
 // GetUserInfo implements bridgev2.NetworkAPI.

@@ -156,12 +156,6 @@ in
           ProtectKernelTunables = true;
           ProtectControlGroups = true;
           RestrictSUIDSGID = true;
-
-          # Restrict WebSocket API to localhost only.
-          # simplex-chat has no built-in authentication for its WebSocket API,
-          # so we use systemd's IP filtering to ensure only local connections.
-          IPAddressAllow = "localhost";
-          IPAddressDeny = "any";
         }
         // (
           if lib.hasPrefix "/var/lib/" "${dataDir}/" then
