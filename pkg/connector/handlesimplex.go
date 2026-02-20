@@ -331,8 +331,8 @@ func (s *SimplexClient) handleChatItemUpdated(ctx context.Context, data simplexc
 		Data:          &item,
 		ConvertEditFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, existing []*database.Message, data *simplexclient.ChatItem) (*bridgev2.ConvertedEdit, error) {
 			cm := convertChatItemToMatrix(data)
-			editParts := make([]*bridgev2.ConvertedEditPart, len(cm.Parts))
-			for i, p := range cm.Parts {
+			editParts := make([]*bridgev2.ConvertedEditPart, 0, len(cm.Parts))
+			for _, p := range cm.Parts {
 				if filePath, ok := p.Extra["fi.mau.simplex.file_path"].(string); ok {
 					delete(p.Extra, "fi.mau.simplex.file_path")
 					filePath = s.resolveSimplexFilePath(filePath)
@@ -340,11 +340,26 @@ func (s *SimplexClient) handleChatItemUpdated(ctx context.Context, data simplexc
 						zerolog.Ctx(ctx).Err(err).Str("file_path", filePath).Msg("Failed to upload file to Matrix (edit)")
 					}
 				}
-				editParts[i] = &bridgev2.ConvertedEditPart{
+				// Match this converted part to the existing database message by PartID.
+				var existingPart *database.Message
+				for _, ex := range existing {
+					if ex.PartID == p.ID {
+						existingPart = ex
+						break
+					}
+				}
+				if existingPart == nil && len(existing) > 0 {
+					existingPart = existing[0]
+				}
+				if existingPart == nil {
+					continue
+				}
+				editParts = append(editParts, &bridgev2.ConvertedEditPart{
+					Part:    existingPart,
 					Type:    p.Type,
 					Content: p.Content,
 					Extra:   p.Extra,
-				}
+				})
 			}
 			return &bridgev2.ConvertedEdit{ModifiedParts: editParts}, nil
 		},
@@ -390,6 +405,12 @@ func (s *SimplexClient) handleChatItemReaction(ctx context.Context, data simplex
 		sender = s.makeEventSenderFromContact(reaction.FromContact)
 	} else if reaction.FromMember != nil {
 		sender = s.makeEventSenderFromMember(reaction.FromMember)
+	} else if reaction.ChatReaction.ChatDir != nil {
+		// Fall back to ChatDir for sender identification (same pattern as messages).
+		sender = s.makeEventSenderFromDir(*reaction.ChatReaction.ChatDir)
+		if reaction.ChatReaction.ChatDir.Type == "directRcv" && reaction.ChatInfo.Contact != nil {
+			sender = s.makeEventSenderFromContact(reaction.ChatInfo.Contact)
+		}
 	} else {
 		loginID, _ := simplexid.ParseUserLoginID(s.UserLogin.ID)
 		sender = bridgev2.EventSender{IsFromMe: true, Sender: simplexid.MakeUserID(loginID)}
