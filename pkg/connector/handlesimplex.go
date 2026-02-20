@@ -245,17 +245,40 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 
 	// If there is a file attached and it has been downloaded (FilePath set), convert it.
 	if item.File != nil && item.File.GetFilePath() != "" {
+		// Determine the Matrix message type from the SimpleX MsgContent type.
+		msgType := event.MsgFile
+		var mc simplexclient.MsgContent
+		if len(item.Content.MsgContent) > 0 {
+			_ = json.Unmarshal(item.Content.MsgContent, &mc)
+		}
+		switch mc.Type {
+		case "image":
+			msgType = event.MsgImage
+		case "video":
+			msgType = event.MsgVideo
+		case "voice":
+			msgType = event.MsgAudio
+		}
+		// Use caption text as Body when available, with FileName for the actual file name.
+		fileBody := item.File.FileName
+		fileName := ""
+		if body != "" {
+			fileBody = body
+			fileName = item.File.FileName
+		}
+		content := &event.MessageEventContent{
+			MsgType:  msgType,
+			Body:     fileBody,
+			FileName: fileName,
+			Info: &event.FileInfo{
+				Size: int(item.File.FileSize),
+			},
+		}
 		return &bridgev2.ConvertedMessage{
 			Parts: []*bridgev2.ConvertedMessagePart{{
 				ID:   networkid.PartID("file"),
 				Type: event.EventMessage,
-				Content: &event.MessageEventContent{
-					MsgType: event.MsgFile,
-					Body:    item.File.FileName,
-					Info: &event.FileInfo{
-						Size: int(item.File.FileSize),
-					},
-				},
+				Content: content,
 				Extra: map[string]any{
 					"fi.mau.simplex.file_path": item.File.GetFilePath(),
 				},
@@ -338,6 +361,12 @@ func (s *SimplexClient) handleChatItemsDeleted(ctx context.Context, data simplex
 		portalKey := s.makePortalKeyFromChatInfo(del.DeletedChatItem.ChatInfo)
 		msgID := simplexid.MakeMessageID(item.Meta.ItemID)
 
+		sender := s.makeEventSenderFromDir(item.ChatDir)
+		// Resolve directRcv sender: use contact from chat info
+		if item.ChatDir.Type == "directRcv" && del.DeletedChatItem.ChatInfo.Contact != nil {
+			sender = s.makeEventSenderFromContact(del.DeletedChatItem.ChatInfo.Contact)
+		}
+
 		s.UserLogin.QueueRemoteEvent(&simplevent.MessageRemove{
 			EventMeta: simplevent.EventMeta{
 				Type: bridgev2.RemoteEventMessageRemove,
@@ -345,7 +374,7 @@ func (s *SimplexClient) handleChatItemsDeleted(ctx context.Context, data simplex
 					return c.Int64("item_id", item.Meta.ItemID)
 				},
 				PortalKey: portalKey,
-				Sender:    s.makeEventSenderFromDir(item.ChatDir),
+				Sender:    sender,
 				Timestamp: time.Now(),
 			},
 			TargetMessage: msgID,

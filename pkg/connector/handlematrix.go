@@ -96,7 +96,7 @@ func (s *SimplexClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.M
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", bridgev2.ErrMediaDownloadFailed, err)
 		}
-		tmpDir := os.TempDir()
+		tmpDir := filepath.Join(s.Main.Config.FilesFolder, "tmp")
 		fileName := msg.Content.Body
 		if fileName == "" {
 			fileName = "file"
@@ -129,13 +129,14 @@ func (s *SimplexClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.M
 		// MsgContent must NOT have filePath – that field doesn't exist in simplex MsgContent.
 		// image/video require the "image" field; video/voice require "duration" field.
 		composed.FileSource = &simplexclient.CryptoFile{FilePath: tmpPathToClean}
+		caption := msg.Content.GetCaption()
 		switch msgType {
 		case "image":
-			composed.MsgContent = simplexclient.MakeMsgContentImage(fileName, "")
+			composed.MsgContent = simplexclient.MakeMsgContentImage(caption, "")
 		case "video":
-			composed.MsgContent = simplexclient.MakeMsgContentVideo(fileName, "", 0)
+			composed.MsgContent = simplexclient.MakeMsgContentVideo(caption, "", 0)
 		case "voice":
-			composed.MsgContent = simplexclient.MakeMsgContentVoice("", 0)
+			composed.MsgContent = simplexclient.MakeMsgContentVoice(caption, 0)
 		default:
 			composed.MsgContent = simplexclient.MakeMsgContentFile(fileName)
 		}

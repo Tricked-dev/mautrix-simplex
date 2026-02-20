@@ -113,6 +113,7 @@ func (s *SimplexClient) contactToChatInfo(contact *simplexclient.Contact, selfLo
 			otherUserID: {
 				EventSender: bridgev2.EventSender{Sender: otherUserID},
 				Membership:  event.MembershipJoin,
+				UserInfo:    s.contactToUserInfo(contact),
 			},
 			selfUserID: {
 				EventSender: bridgev2.EventSender{Sender: selfUserID, IsFromMe: true},
@@ -149,7 +150,7 @@ func (s *SimplexClient) groupToChatInfo(group *simplexclient.GroupInfo, members 
 	}
 
 	memberMap := make(map[networkid.UserID]bridgev2.ChatMember, len(members)+1)
-	for _, m := range members {
+	for i, m := range members {
 		if m.MemberStatus != "memActive" && m.MemberStatus != "memCreator" && m.MemberStatus != "memAdmin" {
 			continue
 		}
@@ -167,6 +168,7 @@ func (s *SimplexClient) groupToChatInfo(group *simplexclient.GroupInfo, members 
 			EventSender: bridgev2.EventSender{Sender: userID},
 			Membership:  event.MembershipJoin,
 			PowerLevel:  &pl,
+			UserInfo:    s.memberToUserInfo(&members[i]),
 		}
 	}
 	// Add the local (self) user so the bridge invites @testuser to the room.

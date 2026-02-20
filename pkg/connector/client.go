@@ -90,11 +90,8 @@ func (s *SimplexClient) tryConnect(ctx context.Context, retryCount int) {
 	s.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
 	log.Info().Str("ws_url", s.wsURL).Msg("Connected to simplex-chat")
 
-	// Sync contacts and groups if not done yet
-	meta := s.UserLogin.Metadata.(*simplexid.UserLoginMetadata)
-	if !meta.ChatsSynced {
-		go s.syncChats(ctx)
-	}
+	// Sync contacts and groups on every connect to keep avatars/profiles up to date
+	go s.syncChats(ctx)
 
 	// Start event loop
 	connCtx, cancel := context.WithCancel(ctx)

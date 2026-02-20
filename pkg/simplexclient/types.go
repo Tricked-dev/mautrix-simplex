@@ -171,7 +171,7 @@ type ChatItemContent struct {
 // Use MakeMsgContent helpers to construct correctly.
 type MsgContent struct {
 	Type     string  `json:"type"`
-	Text     string  `json:"text,omitempty"`
+	Text     string  `json:"text"`
 	Image    *string `json:"image,omitempty"`    // base64 thumbnail for image/video; required for MCImage/MCVideo
 	Duration *int    `json:"duration,omitempty"` // seconds for video/voice; required for MCVideo/MCVoice
 }

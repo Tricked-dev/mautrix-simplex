@@ -233,14 +233,15 @@ func (c *Client) DeleteChatItem(chatType ChatType, chatID, itemID int64, mode De
 	default:
 		modeStr = "broadcast"
 	}
-	// Format: /_delete item @<chatId> [<itemId>] <mode>
-	// _strP parses a JSON value; NonEmpty ChatItemId and CIDeleteMode are both JSON-encoded
-	itemIDsJSON := fmt.Sprintf("[%d]", itemID)
-	deleteModeJSON := fmt.Sprintf(`{"type":"%s"}`, modeStr)
-	cmd := fmt.Sprintf("/_delete item %s%d %s %s", chatType, chatID, itemIDsJSON, deleteModeJSON)
-	respType, _, err := c.sendCmd(cmd)
+	// Format: /_delete item @<chatId> <itemId1>[,<itemId2>,...] <mode>
+	// Item IDs are bare comma-separated numbers, mode is a bare word (broadcast/internal).
+	cmd := fmt.Sprintf(`/_delete item %s%d %d %s`, chatType, chatID, itemID, modeStr)
+	respType, raw, err := c.sendCmd(cmd)
 	if err != nil {
 		return err
+	}
+	if respType == "chatCmdError" {
+		return fmt.Errorf("simplex-chat delete error: %s", string(raw))
 	}
 	if respType != "chatItemsDeleted" {
 		return fmt.Errorf("unexpected response type: %s", respType)
