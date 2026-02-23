@@ -229,8 +229,17 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 		body, html = SimplexFormattedToMatrix(item.FormattedText)
 	}
 
+	// Extract reply-to information from SimpleX quoted item.
+	var replyTo *networkid.MessageOptionalPartID
+	if item.QuotedItem != nil && item.QuotedItem.ItemID != nil {
+		replyTo = &networkid.MessageOptionalPartID{
+			MessageID: simplexid.MakeMessageID(*item.QuotedItem.ItemID),
+		}
+	}
+
 	if item.Meta.ItemDeleted != nil {
 		return &bridgev2.ConvertedMessage{
+			ReplyTo: replyTo,
 			Parts: []*bridgev2.ConvertedMessagePart{{
 				ID:   networkid.PartID(""),
 				Type: event.EventMessage,
@@ -275,6 +284,7 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 			},
 		}
 		return &bridgev2.ConvertedMessage{
+			ReplyTo: replyTo,
 			Parts: []*bridgev2.ConvertedMessagePart{{
 				ID:   networkid.PartID("file"),
 				Type: event.EventMessage,
@@ -296,6 +306,7 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 	}
 
 	return &bridgev2.ConvertedMessage{
+		ReplyTo: replyTo,
 		Parts: []*bridgev2.ConvertedMessagePart{{
 			ID:      networkid.PartID(""),
 			Type:    event.EventMessage,
@@ -566,11 +577,31 @@ func (s *SimplexClient) handleRcvFileDescrReady(ctx context.Context, data simple
 }
 
 // syncChats creates/updates portals for all existing contacts and groups.
+// On first connect it does a full sync including member lists.
+// On reconnects (ChatsSynced already true) it only updates names/avatars/topics
+// to avoid kicking and re-inviting all members in Matrix rooms.
 func (s *SimplexClient) syncChats(ctx context.Context) {
 	log := zerolog.Ctx(ctx)
 	if s.Client == nil {
 		return
 	}
+	meta := s.UserLogin.Metadata.(*simplexid.UserLoginMetadata)
+	isReconnect := meta.ChatsSynced
+
+	// On reconnect, use a GetChatInfo wrapper that strips the member list
+	// so bridgev2 doesn't do a full member reconciliation.
+	getChatInfoFunc := s.GetChatInfo
+	if isReconnect {
+		getChatInfoFunc = func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+			info, err := s.GetChatInfo(ctx, portal)
+			if err != nil {
+				return nil, err
+			}
+			info.Members = nil
+			return info, nil
+		}
+	}
+
 	loginID, err := simplexid.ParseUserLoginID(s.UserLogin.ID)
 	if err != nil {
 		log.Err(err).Msg("Failed to parse user login ID during sync")
@@ -592,7 +623,7 @@ func (s *SimplexClient) syncChats(ctx context.Context) {
 					PortalKey:    portalKey,
 					CreatePortal: true,
 				},
-				GetChatInfoFunc: s.GetChatInfo,
+				GetChatInfoFunc: getChatInfoFunc,
 			})
 		}
 	}
@@ -612,13 +643,12 @@ func (s *SimplexClient) syncChats(ctx context.Context) {
 					PortalKey:    portalKey,
 					CreatePortal: true,
 				},
-				GetChatInfoFunc: s.GetChatInfo,
+				GetChatInfoFunc: getChatInfoFunc,
 			})
 		}
 	}
 
 	// Mark chats as synced
-	meta := s.UserLogin.Metadata.(*simplexid.UserLoginMetadata)
 	meta.ChatsSynced = true
 	if err := s.UserLogin.Save(ctx); err != nil {
 		log.Err(err).Msg("Failed to save user login after chat sync")

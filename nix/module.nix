@@ -39,6 +39,22 @@ in
       '';
     };
 
+    environmentFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        File containing environment variables for the mautrix-simplex service.
+        Used with env_config_prefix to override config values at runtime.
+
+        Supports _FILE suffix to read values from files. For example with
+        env_config_prefix = "MAUTRIX_SIMPLEX_":
+          MAUTRIX_SIMPLEX_APPSERVICE__AS_TOKEN_FILE=/run/secrets/as_token
+          MAUTRIX_SIMPLEX_APPSERVICE__HS_TOKEN_FILE=/run/secrets/hs_token
+          MAUTRIX_SIMPLEX_APPSERVICE__ID_FILE=/run/secrets/id
+          MAUTRIX_SIMPLEX_PROVISIONING__SHARED_SECRET_FILE=/run/secrets/shared_secret
+      '';
+    };
+
     serviceDependencies = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = lib.optional config.services.matrix-synapse.enable config.services.matrix-synapse.serviceUnit;
@@ -196,6 +212,9 @@ in
           ProtectKernelTunables = true;
           ProtectControlGroups = true;
           RestrictSUIDSGID = true;
+        }
+        // lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
         }
         // (
           if lib.hasPrefix "/var/lib/" "${dataDir}/" then
