@@ -18,12 +18,15 @@ package connector
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -132,11 +135,21 @@ func (s *SimplexClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.M
 		caption := msg.Content.GetCaption()
 		switch msgType {
 		case "image":
-			composed.MsgContent = simplexclient.MakeMsgContentImage(caption, "")
+			thumb := ffmpegThumbnailBase64(ctx, tmpPathToClean)
+			composed.MsgContent = simplexclient.MakeMsgContentImage(caption, thumb)
 		case "video":
-			composed.MsgContent = simplexclient.MakeMsgContentVideo(caption, "", 0)
+			thumb := ffmpegThumbnailBase64(ctx, tmpPathToClean)
+			duration := 0
+			if info := msg.Content.GetInfo(); info != nil && info.Duration > 0 {
+				duration = int(info.Duration / 1000)
+			}
+			composed.MsgContent = simplexclient.MakeMsgContentVideo(caption, thumb, duration)
 		case "voice":
-			composed.MsgContent = simplexclient.MakeMsgContentVoice(caption, 0)
+			duration := 0
+			if info := msg.Content.GetInfo(); info != nil && info.Duration > 0 {
+				duration = int(info.Duration / 1000)
+			}
+			composed.MsgContent = simplexclient.MakeMsgContentVoice(caption, duration)
 		default:
 			composed.MsgContent = simplexclient.MakeMsgContentFile(fileName)
 		}
@@ -276,4 +289,38 @@ func (s *SimplexClient) HandleMatrixMessageRemove(ctx context.Context, msg *brid
 		return fmt.Errorf("failed to parse message ID: %w", err)
 	}
 	return s.Client.DeleteChatItem(chatType, chatID, itemID, simplexclient.DeleteModeBroadcast)
+}
+
+// ffmpegThumbnailBase64 generates a small JPEG thumbnail from a media file using
+// ffmpeg and returns it as a base64 data URI. The thumbnail is kept tiny (max 64px)
+// at low quality so the base64 fits within SimpleX's ~16KB message size limit.
+// Returns empty string on failure.
+func ffmpegThumbnailBase64(ctx context.Context, filePath string) string {
+	log := zerolog.Ctx(ctx)
+	thumbPath := filePath + ".thumb.jpg"
+	defer os.Remove(thumbPath)
+
+	// Extract a single frame, scale to max 256px, encode as low quality JPEG.
+	// SimpleX has a ~16KB message size limit and the thumbnail is embedded as
+	// base64 inside the JSON payload, so aim for ~6-10KB base64 (q:v 10).
+	// A larger but compressed image gives a better preview than a tiny sharp one.
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-i", filePath,
+		"-vframes", "1",
+		"-vf", "scale='min(256,iw)':'min(256,ih)':force_original_aspect_ratio=decrease",
+		"-q:v", "10",
+		"-y",
+		thumbPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Warn().Err(err).Str("output", string(out)).Msg("ffmpeg thumbnail generation failed")
+		return ""
+	}
+
+	thumbData, err := os.ReadFile(thumbPath)
+	if err != nil || len(thumbData) == 0 {
+		return ""
+	}
+
+	return "data:image/jpg;base64," + base64.StdEncoding.EncodeToString(thumbData)
 }
