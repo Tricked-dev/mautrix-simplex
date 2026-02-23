@@ -25,10 +25,26 @@
         simplex-chat = pkgs.callPackage ./nix/simplex-chat.nix { };
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
+        dockerImage = pkgs.dockerTools.buildLayeredImage {
+          name = "mautrix-simplex";
+          tag = "latest";
+          contents = [
+            mautrix-simplex
+            pkgs.cacert
+            pkgs.ffmpeg
+          ];
+          config = {
+            Cmd = [ "/bin/mautrix-simplex" "-c" "/data/config.yaml" ];
+            WorkingDir = "/data";
+            Env = [ "HOME=/data" ];
+            ExposedPorts = { "29340/tcp" = { }; };
+            Volumes = { "/data" = { }; };
+          };
+        };
       in
       {
         packages = {
-          inherit mautrix-simplex simplex-chat bbctl;
+          inherit mautrix-simplex simplex-chat bbctl dockerImage;
           default = mautrix-simplex;
         };
 
