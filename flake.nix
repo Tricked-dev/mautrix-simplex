@@ -41,10 +41,41 @@
             Volumes = { "/data" = { }; };
           };
         };
+        dockerImageBundled = pkgs.dockerTools.buildLayeredImage {
+          name = "mautrix-simplex";
+          tag = "with-simplex";
+          contents = [
+            mautrix-simplex
+            simplex-chat
+            pkgs.cacert
+            pkgs.ffmpeg
+          ];
+          config = {
+            Cmd = [ "/bin/mautrix-simplex" "-c" "/data/config.yaml" ];
+            WorkingDir = "/data";
+            Env = [ "HOME=/data" ];
+            ExposedPorts = { "29340/tcp" = { }; };
+            Volumes = { "/data" = { }; };
+          };
+        };
+        dockerImageSimplex = pkgs.dockerTools.buildLayeredImage {
+          name = "simplex-chat";
+          tag = "latest";
+          contents = [
+            simplex-chat
+            pkgs.cacert
+          ];
+          config = {
+            Cmd = [ "/bin/simplex-chat" ];
+            WorkingDir = "/data";
+            Env = [ "HOME=/data" ];
+            Volumes = { "/data" = { }; };
+          };
+        };
       in
       {
         packages = {
-          inherit mautrix-simplex simplex-chat bbctl dockerImage;
+          inherit mautrix-simplex simplex-chat bbctl dockerImage dockerImageBundled dockerImageSimplex;
           default = mautrix-simplex;
         };
 
