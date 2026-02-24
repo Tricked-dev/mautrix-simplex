@@ -18,12 +18,14 @@ package connector
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -211,6 +213,26 @@ func (s *SimplexClient) handleNewChatItems(ctx context.Context, data simplexclie
 								Body:    "[File transfer failed: " + err.Error() + "]",
 							}
 						}
+					} else if imgBytes, ok := part.Extra["fi.mau.simplex.preview_image_bytes"].([]byte); ok {
+						delete(part.Extra, "fi.mau.simplex.preview_image_bytes")
+						mxcURL, encFile, err := intent.UploadMedia(ctx, portal.MXID, imgBytes, "preview.jpg", "image/jpeg")
+						if err != nil {
+							zerolog.Ctx(ctx).Err(err).Msg("Failed to upload link preview image to Matrix")
+							part.Content = &event.MessageEventContent{
+								MsgType: event.MsgNotice,
+								Body:    "[Link preview image upload failed: " + err.Error() + "]",
+							}
+						} else {
+							if encFile != nil {
+								part.Content.File = encFile
+							} else {
+								part.Content.URL = mxcURL
+							}
+							part.Content.Info = &event.FileInfo{
+								MimeType: "image/jpeg",
+								Size:     len(imgBytes),
+							}
+						}
 					}
 				}
 				return cm, nil
@@ -235,6 +257,62 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 		replyTo = &networkid.MessageOptionalPartID{
 			MessageID: simplexid.MakeMessageID(*item.QuotedItem.ItemID),
 		}
+	}
+
+	// Parse MsgContent for type-specific handling (link previews, etc.)
+	var mc simplexclient.MsgContent
+	if len(item.Content.MsgContent) > 0 {
+		_ = json.Unmarshal(item.Content.MsgContent, &mc)
+	}
+
+	// For link-type messages with a preview image, send as m.image with the
+	// thumbnail and title/description shown as the caption.
+	if mc.Type == "link" && mc.Preview != nil && mc.Preview.Image != nil && *mc.Preview.Image != "" {
+		imgData, err := base64.StdEncoding.DecodeString(*mc.Preview.Image)
+		if err == nil && len(imgData) > 0 {
+			titleBody := mc.Preview.Title
+			if titleBody == "" {
+				titleBody = mc.Preview.URI
+			}
+			if mc.Preview.Description != "" {
+				titleBody += " — " + mc.Preview.Description
+			}
+			return &bridgev2.ConvertedMessage{
+				ReplyTo: replyTo,
+				Parts: []*bridgev2.ConvertedMessagePart{{
+					ID:   networkid.PartID("link-preview"),
+					Type: event.EventMessage,
+					Content: &event.MessageEventContent{
+						MsgType: event.MsgImage,
+						Body:    titleBody,
+					},
+					Extra: map[string]any{
+						"fi.mau.simplex.preview_image_bytes": imgData,
+						"external_url":                       mc.Preview.URI,
+					},
+				}},
+			}
+		}
+	}
+
+	// For link-type messages without an image (or with bad image data), render
+	// as a formatted text message with title and description.
+	if mc.Type == "link" && mc.Preview != nil {
+		preview := mc.Preview
+		if !strings.Contains(body, preview.URI) {
+			if body != "" {
+				body += "\n" + preview.URI
+			} else {
+				body = preview.URI
+			}
+		}
+		var htmlBuf strings.Builder
+		fmt.Fprintf(&htmlBuf, `<strong><a href="%s">%s</a></strong>`,
+			escapeHTML(preview.URI), escapeHTML(preview.Title))
+		if preview.Description != "" {
+			fmt.Fprintf(&htmlBuf, "<br><em>%s</em>", escapeHTML(preview.Description))
+		}
+		html = htmlBuf.String()
 	}
 
 	if item.Meta.ItemDeleted != nil {

@@ -37,6 +37,10 @@ type SimplexConfig struct {
 	// FilesFolder is the folder where simplex-chat stores received files.
 	// Must match the --files-folder flag passed to simplex-chat.
 	FilesFolder string `yaml:"files_folder"`
+	// LinkPreviewFamilyDNS controls whether link preview URL fetches are
+	// resolved using Cloudflare for Families DNS (1.1.1.3 / 1.0.0.3).
+	// This filters malware and adult-content domains at the DNS level.
+	LinkPreviewFamilyDNS bool `yaml:"link_preview_family_dns"`
 
 	displaynameTemplate *template.Template `yaml:"-"`
 }
@@ -80,6 +84,7 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "displayname_template")
 	helper.Copy(up.Str, "simplex_binary")
 	helper.Copy(up.Str, "files_folder")
+	helper.Copy(up.Bool, "link_preview_family_dns")
 }
 
 func (s *SimplexConnector) GetConfig() (string, any, up.Upgrader) {

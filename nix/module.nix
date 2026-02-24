@@ -125,6 +125,7 @@ in
         displayname_template = lib.mkDefault "{{.DisplayName}} (SimpleX)";
         simplex_binary = lib.mkDefault "${cfg.simplexChatPackage}/bin/simplex-chat";
         files_folder = lib.mkDefault cfg.filesFolder;
+        link_preview_family_dns = lib.mkDefault true;
       };
     };
 

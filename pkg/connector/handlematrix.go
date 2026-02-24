@@ -20,10 +20,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -152,6 +155,17 @@ func (s *SimplexClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.M
 			composed.MsgContent = simplexclient.MakeMsgContentVoice(caption, duration)
 		default:
 			composed.MsgContent = simplexclient.MakeMsgContentFile(fileName)
+		}
+	}
+
+	// For plain text messages containing a URL, fetch a link preview and upgrade
+	// the message to a SimpleX "link" type so recipients see the preview card.
+	if composed.FileSource == nil && composed.MsgContent.Type == "text" {
+		if uri := extractFirstURL(composed.MsgContent.Text); uri != "" {
+			zerolog.Ctx(ctx).Debug().Str("uri", uri).Msg("Fetching link preview for outgoing message")
+			if preview := fetchLinkPreview(ctx, s.Main.linkPreviewClient, uri); preview != nil {
+				composed.MsgContent = simplexclient.MakeMsgContentLink(composed.MsgContent.Text, preview)
+			}
 		}
 	}
 
@@ -323,4 +337,127 @@ func ffmpegThumbnailBase64(ctx context.Context, filePath string) string {
 	}
 
 	return "data:image/jpg;base64," + base64.StdEncoding.EncodeToString(thumbData)
+}
+
+var urlRe = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// extractFirstURL returns the first http/https URL found in text, or "".
+func extractFirstURL(text string) string {
+	return urlRe.FindString(text)
+}
+
+var (
+	ogMetaRe   = regexp.MustCompile(`(?i)<meta[^>]+>`)
+	propertyRe = regexp.MustCompile(`(?i)property=["'](og:[^"']+)["']`)
+	contentRe  = regexp.MustCompile(`(?i)content=["']([^"']*)["']`)
+	titleTagRe = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)</title>`)
+)
+
+func extractOGTag(html, prop string) string {
+	for _, tag := range ogMetaRe.FindAllString(html, -1) {
+		m := propertyRe.FindStringSubmatch(tag)
+		if m == nil || !strings.EqualFold(m[1], prop) {
+			continue
+		}
+		c := contentRe.FindStringSubmatch(tag)
+		if c != nil {
+			return c[1]
+		}
+	}
+	return ""
+}
+
+// fetchLinkPreview fetches the page at uri and extracts OG metadata plus a
+// thumbnail image. Returns nil if no useful data could be retrieved.
+func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *simplexclient.LinkPreview {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("User-Agent", "TelegramBot (like TwitterBot)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") && !strings.Contains(ct, "xhtml") {
+		return nil
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return nil
+	}
+	page := string(raw)
+
+	title := extractOGTag(page, "og:title")
+	if title == "" {
+		if m := titleTagRe.FindStringSubmatch(page); m != nil {
+			title = strings.TrimSpace(m[1])
+		}
+	}
+	if title == "" {
+		return nil
+	}
+
+	preview := &simplexclient.LinkPreview{
+		URI:         uri,
+		Title:       title,
+		Description: extractOGTag(page, "og:description"),
+	}
+
+	// Fetch the og:image and generate a thumbnail via ffmpeg.
+	if imgURL := extractOGTag(page, "og:image"); imgURL != "" {
+		if thumb := fetchURLThumbnailBase64(ctx, client, imgURL); thumb != "" {
+			preview.Image = &thumb
+		}
+	}
+
+	return preview
+}
+
+// fetchURLThumbnailBase64 downloads an image URL, writes it to a temp file,
+// and returns a base64 thumbnail the same way ffmpegThumbnailBase64 does.
+func fetchURLThumbnailBase64(ctx context.Context, client *http.Client, imgURL string) string {
+	req, err := http.NewRequestWithContext(ctx, "GET", imgURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "TelegramBot (like TwitterBot)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+
+	tmp, err := os.CreateTemp("", "preview-img-*")
+	if err != nil {
+		return ""
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err = tmp.Write(data); err != nil {
+		tmp.Close()
+		return ""
+	}
+	tmp.Close()
+
+	return ffmpegThumbnailBase64(ctx, tmpPath)
 }

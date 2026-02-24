@@ -160,8 +160,17 @@ type ChatItemContent struct {
 	MsgContent json.RawMessage `json:"msgContent,omitempty"`
 }
 
+// LinkPreview represents a link preview attached to a "link" type message.
+type LinkPreview struct {
+	URI         string  `json:"uri"`
+	Title       string  `json:"title"`
+	Description string  `json:"description,omitempty"`
+	Image       *string `json:"image,omitempty"` // base64-encoded thumbnail
+}
+
 // MsgContent represents message content for sending.
 // For "text": Type="text", Text=body
+// For "link": Type="link", Text=body, Preview=link preview data
 // For "image": Type="image", Text=alt/filename, Image=base64 thumbnail (required, may be empty string "")
 // For "file": Type="file", Text=filename
 // For "video": Type="video", Text=filename, Image=thumbnail (required), Duration=seconds (required)
@@ -170,15 +179,21 @@ type ChatItemContent struct {
 // Note: "image" field is required (not omitempty) for MCImage/MCVideo; "duration" is required for MCVideo/MCVoice.
 // Use MakeMsgContent helpers to construct correctly.
 type MsgContent struct {
-	Type     string  `json:"type"`
-	Text     string  `json:"text"`
-	Image    *string `json:"image,omitempty"`    // base64 thumbnail for image/video; required for MCImage/MCVideo
-	Duration *int    `json:"duration,omitempty"` // seconds for video/voice; required for MCVideo/MCVoice
+	Type     string       `json:"type"`
+	Text     string       `json:"text"`
+	Image    *string      `json:"image,omitempty"`    // base64 thumbnail for image/video; required for MCImage/MCVideo
+	Duration *int         `json:"duration,omitempty"` // seconds for video/voice; required for MCVideo/MCVoice
+	Preview  *LinkPreview `json:"preview,omitempty"`  // link preview for type "link"
 }
 
 // MakeMsgContentText returns a text MsgContent.
 func MakeMsgContentText(text string) MsgContent {
 	return MsgContent{Type: "text", Text: text}
+}
+
+// MakeMsgContentLink returns a link MsgContent with a preview.
+func MakeMsgContentLink(text string, preview *LinkPreview) MsgContent {
+	return MsgContent{Type: "link", Text: text, Preview: preview}
 }
 
 // MakeMsgContentFile returns a file MsgContent.

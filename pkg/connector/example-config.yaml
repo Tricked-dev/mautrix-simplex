@@ -3,3 +3,7 @@ simplex_binary: "simplex-chat"
 # The folder where simplex-chat stores received files (must match --files-folder flag).
 # If empty, defaults to ~/Downloads.
 files_folder: ""
+# Use Cloudflare for Families DNS (1.1.1.3 / 1.0.0.3, or the IPv6 equivalents
+# 2606:4700:4700::1113 / 2606:4700:4700::1003) when resolving URLs for link
+# preview fetching. These servers block malware and adult-content domains.
+link_preview_family_dns: false

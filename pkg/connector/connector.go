@@ -19,6 +19,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -32,8 +34,9 @@ import (
 
 // SimplexConnector implements bridgev2.NetworkConnector.
 type SimplexConnector struct {
-	Bridge *bridgev2.Bridge
-	Config SimplexConfig
+	Bridge            *bridgev2.Bridge
+	Config            SimplexConfig
+	linkPreviewClient *http.Client
 }
 
 var _ bridgev2.NetworkConnector = (*SimplexConnector)(nil)
@@ -54,7 +57,49 @@ func (s *SimplexConnector) Init(bridge *bridgev2.Bridge) {
 }
 
 func (s *SimplexConnector) Start(ctx context.Context) error {
+	s.linkPreviewClient = makeLinkPreviewClient(s.Config.LinkPreviewFamilyDNS)
 	return nil
+}
+
+// makeLinkPreviewClient returns an *http.Client for fetching link previews.
+// If familyDNS is true, DNS resolution uses Cloudflare for Families servers
+// (1.1.1.3 / 1.0.0.3 and their IPv6 equivalents) which filter malware and
+// adult-content domains.
+func makeLinkPreviewClient(familyDNS bool) *http.Client {
+	if !familyDNS {
+		return http.DefaultClient
+	}
+	// Cloudflare for Families nameservers — IPv4 primary/secondary then IPv6.
+	nameservers := []string{
+		"1.1.1.3:53",
+		"1.0.0.3:53",
+		"[2606:4700:4700::1113]:53",
+		"[2606:4700:4700::1003]:53",
+	}
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := &net.Dialer{Timeout: 5 * time.Second}
+			var lastErr error
+			for _, ns := range nameservers {
+				conn, err := d.DialContext(ctx, "udp", ns)
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, lastErr
+		},
+	}
+	dialer := &net.Dialer{
+		Timeout:  10 * time.Second,
+		Resolver: resolver,
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: dialer.DialContext,
+		},
+	}
 }
 
 func (s *SimplexConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
