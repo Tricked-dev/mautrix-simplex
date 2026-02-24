@@ -161,11 +161,13 @@ type ChatItemContent struct {
 }
 
 // LinkPreview represents a link preview attached to a "link" type message.
+// All fields are required by simplex-chat's parser — use empty strings rather
+// than omitting description or image.
 type LinkPreview struct {
-	URI         string  `json:"uri"`
-	Title       string  `json:"title"`
-	Description string  `json:"description,omitempty"`
-	Image       *string `json:"image,omitempty"` // base64-encoded thumbnail
+	URI         string `json:"uri"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Image       string `json:"image"` // base64-encoded thumbnail, empty string if none
 }
 
 // MsgContent represents message content for sending.

@@ -419,7 +419,7 @@ func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *sim
 	// Fetch the og:image and generate a thumbnail via ffmpeg.
 	if imgURL := extractOGTag(page, "og:image"); imgURL != "" {
 		if thumb := fetchURLThumbnailBase64(ctx, client, imgURL); thumb != "" {
-			preview.Image = &thumb
+			preview.Image = thumb
 		}
 	}
 
