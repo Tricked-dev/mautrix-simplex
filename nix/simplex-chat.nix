@@ -9,27 +9,23 @@
 }:
 
 let
-  sources = {
+  version = "6.5.0-beta.5";
+  srcs = {
     x86_64-linux = {
-      version = "6.5.0-beta.5";
-      url = "https://github.com/simplex-chat/simplex-chat/releases/download/v6.5.0-beta.5/simplex-chat-ubuntu-22_04-x86_64";
-      hash = "sha256-kUy7NXOsCpi/vDwXszpetX/PKQ/e1zD/2v+rnhu1voU=";
+      url = "https://github.com/simplex-chat/simplex-chat/releases/download/v${version}/simplex-chat-ubuntu-24_04-x86_64";
+      hash = "sha256-dOhV1KpfDvVTxt4Cfvd8Fdc6tKQJ8wa9zK3aPeNHw14=";
     };
     aarch64-linux = {
-      version = "6.4.8";
-      url = "https://github.com/simplex-chat/simplex-chat/releases/download/v6.4.8/simplex-chat-ubuntu-24_04-aarch64";
-      hash = "sha256-DJwoDyruuoCjLgeGEEJBrzWIo1YUwlkpJOAnpoq5r94=";
+      url = "https://github.com/simplex-chat/simplex-chat/releases/download/v${version}/simplex-chat-ubuntu-24_04-aarch64";
+      hash = "sha256-wplVhgISqxSWftSjfU9EIRgRpKUE9dTlkv1c8Lr3ctQ=";
     };
   };
-  source = sources.${stdenv.hostPlatform.system};
 in
 stdenv.mkDerivation {
   pname = "simplex-chat";
-  version = source.version;
+  inherit version;
 
-  src = fetchurl {
-    inherit (source) url hash;
-  };
+  src = fetchurl srcs.${stdenv.hostPlatform.system};
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [
