@@ -31,6 +31,7 @@ jobs:
       - name: Push Docker image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
+          IMAGE="${IMAGE,,}"
           docker load < result
           docker tag mautrix-simplex:latest "${IMAGE}:latest"
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
