@@ -25,6 +25,7 @@
         simplex-chat = pkgs.callPackage ./nix/simplex-chat.nix { };
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
+        mautrix-webhook = pkgs.callPackage ./nix/webhook-package.nix { };
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "mautrix-simplex";
           tag = "latest";
@@ -72,10 +73,24 @@
             Volumes = { "/data" = { }; };
           };
         };
+        dockerImageWebhook = pkgs.dockerTools.buildLayeredImage {
+          name = "mautrix-webhook";
+          tag = "latest";
+          contents = [
+            mautrix-webhook
+            pkgs.cacert
+          ];
+          config = {
+            Cmd = [ "/bin/mautrix-webhook" "-c" "/data/config.yaml" "--no-update" ];
+            WorkingDir = "/data";
+            Env = [ "HOME=/data" ];
+            Volumes = { "/data" = { }; };
+          };
+        };
       in
       {
         packages = {
-          inherit mautrix-simplex simplex-chat bbctl dockerImage dockerImageBundled dockerImageSimplex;
+          inherit mautrix-simplex mautrix-webhook simplex-chat bbctl dockerImage dockerImageBundled dockerImageSimplex dockerImageWebhook;
           default = mautrix-simplex;
         };
 

@@ -43,6 +43,7 @@ jobs:
         run: |
           nix build .#dockerImage -o result-bridge
           nix build .#dockerImageBundled -o result-bundled
+          nix build .#dockerImageWebhook -o result-webhook
 
       - name: Build simplex-chat Docker image
         if: steps.simplex-changed.outputs.changed == 'true'
@@ -63,6 +64,7 @@ jobs:
 
           docker load < result-bridge
           docker load < result-bundled
+          docker load < result-webhook
 
           docker tag mautrix-simplex:latest       "ghcr.io/${REPO}:latest-${PLATFORM}"
           docker tag mautrix-simplex:with-simplex "ghcr.io/${REPO}:with-simplex-${PLATFORM}"
@@ -77,6 +79,24 @@ jobs:
 
           docker push "ghcr.io/${REPO}:latest-${PLATFORM}"
           docker push "ghcr.io/${REPO}:with-simplex-${PLATFORM}"
+
+      - name: Push webhook Docker image
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          OWNER="${OWNER,,}"
+          PLATFORM="${{ matrix.platform }}"
+
+          docker load < result-webhook
+
+          docker tag mautrix-webhook:latest "ghcr.io/${OWNER}/mautrix-webhook:latest-${PLATFORM}"
+
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+            docker tag mautrix-webhook:latest "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-${PLATFORM}"
+            docker push "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-${PLATFORM}"
+          fi
+
+          docker push "ghcr.io/${OWNER}/mautrix-webhook:latest-${PLATFORM}"
 
       - name: Push simplex-chat Docker image
         if: steps.simplex-changed.outputs.changed == 'true'
@@ -148,6 +168,22 @@ jobs:
             docker buildx imagetools create --tag "ghcr.io/${REPO}:${TAG}-with-simplex" \
               "ghcr.io/${REPO}:${TAG}-with-simplex-amd64" \
               "ghcr.io/${REPO}:${TAG}-with-simplex-arm64"
+          fi
+
+      - name: Create multi-arch manifest for webhook
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          OWNER="${OWNER,,}"
+
+          docker buildx imagetools create --tag "ghcr.io/${OWNER}/mautrix-webhook:latest" \
+            "ghcr.io/${OWNER}/mautrix-webhook:latest-amd64" \
+            "ghcr.io/${OWNER}/mautrix-webhook:latest-arm64"
+
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+            docker buildx imagetools create --tag "ghcr.io/${OWNER}/mautrix-webhook:${TAG}" \
+              "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-amd64" \
+              "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-arm64"
           fi
 
       - name: Create multi-arch manifest for simplex-chat
