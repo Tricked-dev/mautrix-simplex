@@ -32,6 +32,7 @@ type WebhookConnector struct {
 	roomNamesMu sync.Mutex
 
 	templates map[string]*compiledTemplates
+	stalwartClients map[string]*StalwartClient
 }
 
 var _ bridgev2.NetworkConnector = (*WebhookConnector)(nil)
@@ -51,18 +52,35 @@ func (w *WebhookConnector) Init(bridge *bridgev2.Bridge) {
 	w.Bridge = bridge
 	w.roomNames = make(map[string]string)
 	w.templates = make(map[string]*compiledTemplates)
+	w.stalwartClients = make(map[string]*StalwartClient)
 }
 
 func (w *WebhookConnector) Start(ctx context.Context) error {
 	log := w.Bridge.Log.With().Str("component", "webhook-http").Logger()
 
-	// Compile templates for each webhook
+	// Compile templates and initialize stalwart clients for each webhook
 	for _, wh := range w.Config.Webhooks {
 		ct, err := CompileTemplates(wh)
 		if err != nil {
 			return fmt.Errorf("compile templates for %s: %w", wh.Name, err)
 		}
 		w.templates[wh.Name] = ct
+
+		if wh.Enrichment == "stalwart" {
+			sc := &StalwartClient{Config: wh.Stalwart}
+			// Credential inheritance from global config
+			if sc.Config.URL == "" {
+				sc.Config.URL = w.Config.Stalwart.URL
+			}
+			if sc.Config.User == "" {
+				sc.Config.User = w.Config.Stalwart.User
+			}
+			if sc.Config.Pass == "" && sc.Config.PassFile == "" {
+				sc.Config.Pass = w.Config.Stalwart.Pass
+				sc.Config.PassFile = w.Config.Stalwart.PassFile
+			}
+			w.stalwartClients[wh.Name] = sc
+		}
 	}
 
 	// Start HTTP server in background
@@ -205,71 +223,117 @@ func (w *WebhookConnector) makeHandler(wh WebhookConfig, ct *compiledTemplates, 
 			}
 		}
 
-		// Render room key to determine portal
-		roomKey, err := renderTemplate(ct.roomKey, payload)
-		if err != nil {
-			log.Error().Err(err).Str("webhook", wh.Name).Msg("failed to render room_key template")
-			http.Error(wr, "template error", http.StatusInternalServerError)
-			return
-		}
-
-		// Render and store room name for portal creation
-		roomName, err := renderTemplate(ct.roomName, payload)
-		if err != nil {
-			roomName = roomKey
-		}
-		w.setRoomName(roomKey, roomName)
-
-		portalKey := networkid.PortalKey{
-			ID: networkid.PortalID(roomKey),
-		}
-
-		senderID := networkid.UserID("webhook-" + wh.Name)
-		msgID := networkid.MessageID(xid.New().String())
-
-		// Queue remote event — bridgev2 handles portal creation, encryption, etc.
-		login.QueueRemoteEvent(&simplevent.Message[map[string]any]{
-			EventMeta: simplevent.EventMeta{
-				Type:         bridgev2.RemoteEventMessage,
-				PortalKey:    portalKey,
-				CreatePortal: true,
-				Sender: bridgev2.EventSender{
-					Sender: senderID,
-				},
-				Timestamp: time.Now(),
-			},
-			Data: payload,
-			ID:   msgID,
-			ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data map[string]any) (*bridgev2.ConvertedMessage, error) {
-				plain, err := renderTemplate(ct.plain, data)
-				if err != nil {
-					return nil, fmt.Errorf("render plain template: %w", err)
-				}
-
-				content := &event.MessageEventContent{
-					MsgType: event.MsgText,
-					Body:    plain,
-				}
-
-				if ct.html != nil {
-					htmlBody, err := renderTemplate(ct.html, data)
-					if err == nil && htmlBody != "" {
-						content.Format = event.FormatHTML
-						content.FormattedBody = htmlBody
+		if wh.Enrichment == "stalwart" {
+			if events, ok := payload["events"].([]any); ok {
+				for _, ev := range events {
+					if evMap, ok := ev.(map[string]any); ok {
+						w.processEvent(r.Context(), wh, ct, login, evMap, log)
 					}
 				}
-
-				return &bridgev2.ConvertedMessage{
-					Parts: []*bridgev2.ConvertedMessagePart{{
-						ID:      "",
-						Type:    event.EventMessage,
-						Content: content,
-					}},
-				}, nil
-			},
-		})
+			} else {
+				w.processEvent(r.Context(), wh, ct, login, payload, log)
+			}
+		} else {
+			w.processEvent(r.Context(), wh, ct, login, payload, log)
+		}
 
 		wr.Header().Set("Content-Type", "application/json")
 		wr.Write([]byte(`{"status":"ok"}`))
 	}
+}
+
+func (w *WebhookConnector) processEvent(ctx context.Context, wh WebhookConfig, ct *compiledTemplates, login *bridgev2.UserLogin, payload map[string]any, log zerolog.Logger) {
+	eventTS := time.Now()
+
+	if wh.Enrichment == "stalwart" {
+		data, ok := payload["data"].(map[string]any)
+		if ok {
+			messageID, _ := data["message-id"].(string)
+			if messageID != "" {
+				sc := w.stalwartClients[wh.Name]
+				if sc != nil {
+					meta, receivedAt, err := sc.FetchEmailMetadata(ctx, messageID)
+					if err != nil {
+						log.Warn().Err(err).Str("message_id", messageID).Msg("failed to fetch email metadata")
+					} else {
+						for k, v := range meta {
+							if _, exists := data[k]; !exists {
+								data[k] = v
+							}
+						}
+						eventTS = receivedAt
+					}
+				}
+			}
+			// Default missing fields to ""
+			for _, k := range []string{"subject", "from", "to", "preview"} {
+				if _, exists := data[k]; !exists {
+					data[k] = ""
+				}
+			}
+		}
+	}
+
+	// Render room key to determine portal
+	roomKey, err := renderTemplate(ct.roomKey, payload)
+	if err != nil {
+		log.Error().Err(err).Str("webhook", wh.Name).Msg("failed to render room_key template")
+		return
+	}
+
+	// Render and store room name for portal creation
+	roomName, err := renderTemplate(ct.roomName, payload)
+	if err != nil {
+		roomName = roomKey
+	}
+	w.setRoomName(roomKey, roomName)
+
+	portalKey := networkid.PortalKey{
+		ID: networkid.PortalID(roomKey),
+	}
+
+	senderID := networkid.UserID("webhook-" + wh.Name)
+	msgID := networkid.MessageID(xid.New().String())
+
+	// Queue remote event — bridgev2 handles portal creation, encryption, etc.
+	login.QueueRemoteEvent(&simplevent.Message[map[string]any]{
+		EventMeta: simplevent.EventMeta{
+			Type:         bridgev2.RemoteEventMessage,
+			PortalKey:    portalKey,
+			CreatePortal: true,
+			Sender: bridgev2.EventSender{
+				Sender: senderID,
+			},
+			Timestamp: eventTS,
+		},
+		Data: payload,
+		ID:   msgID,
+		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data map[string]any) (*bridgev2.ConvertedMessage, error) {
+			plain, err := renderTemplate(ct.plain, data)
+			if err != nil {
+				return nil, fmt.Errorf("render plain template: %w", err)
+			}
+
+			content := &event.MessageEventContent{
+				MsgType: event.MsgText,
+				Body:    plain,
+			}
+
+			if ct.html != nil {
+				htmlBody, err := renderTemplate(ct.html, data)
+				if err == nil && htmlBody != "" {
+					content.Format = event.FormatHTML
+					content.FormattedBody = htmlBody
+				}
+			}
+
+			return &bridgev2.ConvertedMessage{
+				Parts: []*bridgev2.ConvertedMessagePart{{
+					ID:      "",
+					Type:    event.EventMessage,
+					Content: content,
+				}},
+			}, nil
+		},
+	})
 }

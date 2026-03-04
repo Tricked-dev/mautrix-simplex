@@ -11,7 +11,15 @@ type WebhookNetworkConfig struct {
 	ListenAddress string          `yaml:"listen_address"`
 	InviteUsers   []string        `yaml:"invite_users"`
 	DebugDir      string          `yaml:"debug_dir"`
+	Stalwart      StalwartConfig  `yaml:"stalwart"`
 	Webhooks      []WebhookConfig `yaml:"webhooks"`
+}
+
+type StalwartConfig struct {
+	URL      string `yaml:"url"`
+	User     string `yaml:"user"`
+	Pass     string `yaml:"pass"`
+	PassFile string `yaml:"pass_file"`
 }
 
 type WebhookConfig struct {
@@ -20,6 +28,8 @@ type WebhookConfig struct {
 	RoomKey    string         `yaml:"room_key"`
 	RoomName   string         `yaml:"room_name"`
 	SenderName string         `yaml:"sender_name"`
+	Enrichment string         `yaml:"enrichment"`
+	Stalwart   StalwartConfig `yaml:"stalwart"`
 	Template   TemplateConfig `yaml:"template"`
 }
 
@@ -44,12 +54,23 @@ listen_address: 127.0.0.1:9000
 invite_users:
   - "@user:example.com"
 debug_dir: ""
+stalwart:
+  url: ""
+  user: ""
+  pass: ""
+  pass_file: ""
 webhooks:
   - name: example
     path: /
     room_key: "notifications"
     room_name: "Notifications"
     sender_name: "Webhook Bot"
+    enrichment: ""
+    stalwart:
+      url: ""
+      user: ""
+      pass: ""
+      pass_file: ""
     template:
       plain: "{{.message}}"
       html: "<b>{{.message}}</b>"
@@ -64,5 +85,6 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "listen_address")
 	helper.Copy(up.List, "invite_users")
 	helper.Copy(up.Str, "debug_dir")
+	helper.Copy(up.Map, "stalwart")
 	helper.Copy(up.List, "webhooks")
 }
