@@ -249,6 +249,9 @@ func (w *WebhookConnector) processEvent(ctx context.Context, wh WebhookConfig, c
 		data, ok := payload["data"].(map[string]any)
 		if ok {
 			messageID, _ := data["message-id"].(string)
+			if messageID == "" {
+				messageID, _ = data["messageId"].(string)
+			}
 			if messageID != "" {
 				sc := w.stalwartClients[wh.Name]
 				if sc != nil {
@@ -263,6 +266,12 @@ func (w *WebhookConnector) processEvent(ctx context.Context, wh WebhookConfig, c
 						}
 						eventTS = receivedAt
 					}
+				}
+			}
+			// Copy top-level type into data so it's accessible to templates using .data context
+			if typ, ok := payload["type"].(string); ok {
+				if _, exists := data["type"]; !exists {
+					data["type"] = typ
 				}
 			}
 			// Default missing fields to ""
