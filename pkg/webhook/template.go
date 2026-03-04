@@ -21,7 +21,9 @@ type compiledTemplates struct {
 // FuncMap returns the template function map available in all webhook templates.
 func FuncMap() template.FuncMap {
 	return template.FuncMap{
-		"contains": strings.Contains,
+		"contains": func(s, substr any) bool {
+			return strings.Contains(fmt.Sprint(s), fmt.Sprint(substr))
+		},
 		"join": func(arr any, sep string) string {
 			switch v := arr.(type) {
 			case []string:
