@@ -4,6 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    nix2container.url = "github:nlewo/nix2container";
+    nix2container.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -11,6 +13,7 @@
       self,
       nixpkgs,
       flake-utils,
+      nix2container,
     }:
     {
       nixosModules.default = import ./nix/module.nix;
@@ -22,18 +25,23 @@
           inherit system;
           config.permittedInsecurePackages = [ "olm-3.2.16" ];
         };
+        n2c = nix2container.packages.${system}.nix2container;
         simplex-chat = pkgs.callPackage ./nix/simplex-chat.nix { };
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
         mautrix-webhook = pkgs.callPackage ./nix/webhook-package.nix { };
-        dockerImage = pkgs.dockerTools.buildLayeredImage {
+        dockerImage = n2c.buildImage {
           name = "mautrix-simplex";
           tag = "latest";
-          contents = [
-            mautrix-simplex
-            pkgs.cacert
-            pkgs.ffmpeg
-          ];
+          copyToRoot = pkgs.buildEnv {
+            name = "root";
+            paths = [
+              mautrix-simplex
+              pkgs.cacert
+              pkgs.ffmpeg
+            ];
+            pathsToLink = [ "/bin" "/etc" ];
+          };
           config = {
             Cmd = [ "/bin/mautrix-simplex" "-c" "/data/config.yaml" ];
             WorkingDir = "/data";
@@ -42,15 +50,19 @@
             Volumes = { "/data" = { }; };
           };
         };
-        dockerImageBundled = pkgs.dockerTools.buildLayeredImage {
+        dockerImageBundled = n2c.buildImage {
           name = "mautrix-simplex";
           tag = "with-simplex";
-          contents = [
-            mautrix-simplex
-            simplex-chat
-            pkgs.cacert
-            pkgs.ffmpeg
-          ];
+          copyToRoot = pkgs.buildEnv {
+            name = "root";
+            paths = [
+              mautrix-simplex
+              simplex-chat
+              pkgs.cacert
+              pkgs.ffmpeg
+            ];
+            pathsToLink = [ "/bin" "/etc" ];
+          };
           config = {
             Cmd = [ "/bin/mautrix-simplex" "-c" "/data/config.yaml" ];
             WorkingDir = "/data";
@@ -59,13 +71,17 @@
             Volumes = { "/data" = { }; };
           };
         };
-        dockerImageSimplex = pkgs.dockerTools.buildLayeredImage {
+        dockerImageSimplex = n2c.buildImage {
           name = "simplex-chat";
           tag = "latest";
-          contents = [
-            simplex-chat
-            pkgs.cacert
-          ];
+          copyToRoot = pkgs.buildEnv {
+            name = "root";
+            paths = [
+              simplex-chat
+              pkgs.cacert
+            ];
+            pathsToLink = [ "/bin" "/etc" ];
+          };
           config = {
             Cmd = [ "/bin/simplex-chat" ];
             WorkingDir = "/data";
@@ -73,13 +89,17 @@
             Volumes = { "/data" = { }; };
           };
         };
-        dockerImageWebhook = pkgs.dockerTools.buildLayeredImage {
+        dockerImageWebhook = n2c.buildImage {
           name = "mautrix-webhook";
           tag = "latest";
-          contents = [
-            mautrix-webhook
-            pkgs.cacert
-          ];
+          copyToRoot = pkgs.buildEnv {
+            name = "root";
+            paths = [
+              mautrix-webhook
+              pkgs.cacert
+            ];
+            pathsToLink = [ "/bin" "/etc" ];
+          };
           config = {
             Cmd = [ "/bin/mautrix-webhook" "-c" "/data/config.yaml" "--no-update" ];
             WorkingDir = "/data";
