@@ -39,16 +39,6 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Build bridge Docker images
-        run: |
-          nix build .#dockerImage -o result-bridge
-          nix build .#dockerImageBundled -o result-bundled
-          nix build .#dockerImageWebhook -o result-webhook
-
-      - name: Build simplex-chat Docker image
-        if: steps.simplex-changed.outputs.changed == 'true'
-        run: nix build .#dockerImageSimplex -o result-simplex
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -56,49 +46,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push bridge Docker images
+      - name: Build and push bridge Docker images
         run: |
           REPO="${{ github.repository }}"
           REPO="${REPO,,}"
           PLATFORM="${{ matrix.platform }}"
 
-          docker load < result-bridge
-          docker load < result-bundled
-          docker load < result-webhook
-
-          docker tag mautrix-simplex:latest       "ghcr.io/${REPO}:latest-${PLATFORM}"
-          docker tag mautrix-simplex:with-simplex "ghcr.io/${REPO}:with-simplex-${PLATFORM}"
+          nix run .#dockerImage.copyTo -- "docker://ghcr.io/${REPO}:latest-${PLATFORM}"
+          nix run .#dockerImageBundled.copyTo -- "docker://ghcr.io/${REPO}:with-simplex-${PLATFORM}"
 
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
-            docker tag mautrix-simplex:latest       "ghcr.io/${REPO}:${TAG}-${PLATFORM}"
-            docker tag mautrix-simplex:with-simplex "ghcr.io/${REPO}:${TAG}-with-simplex-${PLATFORM}"
-            docker push "ghcr.io/${REPO}:${TAG}-${PLATFORM}"
-            docker push "ghcr.io/${REPO}:${TAG}-with-simplex-${PLATFORM}"
+            nix run .#dockerImage.copyTo -- "docker://ghcr.io/${REPO}:${TAG}-${PLATFORM}"
+            nix run .#dockerImageBundled.copyTo -- "docker://ghcr.io/${REPO}:${TAG}-with-simplex-${PLATFORM}"
           fi
 
-          docker push "ghcr.io/${REPO}:latest-${PLATFORM}"
-          docker push "ghcr.io/${REPO}:with-simplex-${PLATFORM}"
-
-      - name: Push webhook Docker image
+      - name: Build and push webhook Docker image
         run: |
           OWNER="${{ github.repository_owner }}"
           OWNER="${OWNER,,}"
           PLATFORM="${{ matrix.platform }}"
 
-          docker load < result-webhook
-
-          docker tag mautrix-webhook:latest "ghcr.io/${OWNER}/mautrix-webhook:latest-${PLATFORM}"
+          nix run .#dockerImageWebhook.copyTo -- "docker://ghcr.io/${OWNER}/mautrix-webhook:latest-${PLATFORM}"
 
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
-            docker tag mautrix-webhook:latest "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-${PLATFORM}"
-            docker push "ghcr.io/${OWNER}/mautrix-webhook:${TAG}-${PLATFORM}"
+            nix run .#dockerImageWebhook.copyTo -- "docker://ghcr.io/${OWNER}/mautrix-webhook:${TAG}-${PLATFORM}"
           fi
 
-          docker push "ghcr.io/${OWNER}/mautrix-webhook:latest-${PLATFORM}"
-
-      - name: Push simplex-chat Docker image
+      - name: Build and push simplex-chat Docker image
         if: steps.simplex-changed.outputs.changed == 'true'
         run: |
           OWNER="${{ github.repository_owner }}"
@@ -106,19 +82,13 @@ jobs:
           PLATFORM="${{ matrix.platform }}"
           SIMPLEX_VERSION="$(nix eval --raw ".#packages.${{ matrix.nix-system }}.simplex-chat.version")"
 
-          docker load < result-simplex
-
-          docker tag simplex-chat:latest "ghcr.io/${OWNER}/simplex-chat:latest-${PLATFORM}"
-          docker tag simplex-chat:latest "ghcr.io/${OWNER}/simplex-chat:${SIMPLEX_VERSION}-${PLATFORM}"
+          nix run .#dockerImageSimplex.copyTo -- "docker://ghcr.io/${OWNER}/simplex-chat:latest-${PLATFORM}"
+          nix run .#dockerImageSimplex.copyTo -- "docker://ghcr.io/${OWNER}/simplex-chat:${SIMPLEX_VERSION}-${PLATFORM}"
 
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
-            docker tag simplex-chat:latest "ghcr.io/${OWNER}/simplex-chat:${TAG}-${PLATFORM}"
-            docker push "ghcr.io/${OWNER}/simplex-chat:${TAG}-${PLATFORM}"
+            nix run .#dockerImageSimplex.copyTo -- "docker://ghcr.io/${OWNER}/simplex-chat:${TAG}-${PLATFORM}"
           fi
-
-          docker push "ghcr.io/${OWNER}/simplex-chat:latest-${PLATFORM}"
-          docker push "ghcr.io/${OWNER}/simplex-chat:${SIMPLEX_VERSION}-${PLATFORM}"
 
   manifest:
     needs: build
