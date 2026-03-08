@@ -21,21 +21,26 @@
     // flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          config.permittedInsecurePackages = [ "olm-3.2.16" ];
-        };
+        pkgs = import nixpkgs { inherit system; };
+        # Static packages: use pkgsStatic on Linux so Docker image binaries are
+        # linked against musl (no glibc closure).  Falls back to regular pkgs on
+        # macOS where fully-static binaries are not supported.
+        staticPkgs = if pkgs.stdenv.isLinux then pkgs.pkgsStatic else pkgs;
         n2c = nix2container.packages.${system}.nix2container;
         simplex-chat = pkgs.callPackage ./nix/simplex-chat.nix { };
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
         mautrix-webhook = pkgs.callPackage ./nix/webhook-package.nix { };
+        # Static variants used inside Docker images — same derivations built in
+        # the pkgsStatic environment so the resulting binaries carry no glibc dep.
+        mautrix-simplex-static = staticPkgs.callPackage ./nix/package.nix { };
+        mautrix-webhook-static = staticPkgs.callPackage ./nix/webhook-package.nix { };
         # Minimal ffmpeg: keeps only ffmpeg's internal decoders (h264, hevc, vp8/9,
         # av1, etc. are built into libavcodec without external libraries) and the
         # built-in mjpeg encoder for thumbnail output. All heavy external codec
         # libraries (libx264, libx265, libvpx, libopus, libvorbis, libass…) are
-        # removed, cutting the Nix closure size dramatically.
-        minimalFfmpeg = (pkgs.ffmpeg-headless.override {
+        # removed. Built via staticPkgs so the binary carries no glibc closure.
+        minimalFfmpeg = (staticPkgs.ffmpeg-headless.override {
           withAmf = false;
           withAom = false;
           withAss = false;
@@ -87,7 +92,7 @@
           copyToRoot = pkgs.buildEnv {
             name = "root";
             paths = [
-              mautrix-simplex
+              mautrix-simplex-static
               pkgs.cacert
               minimalFfmpeg
             ];
@@ -107,7 +112,7 @@
           copyToRoot = pkgs.buildEnv {
             name = "root";
             paths = [
-              mautrix-simplex
+              mautrix-simplex-static
               simplex-chat
               pkgs.cacert
               minimalFfmpeg
@@ -146,7 +151,7 @@
           copyToRoot = pkgs.buildEnv {
             name = "root";
             paths = [
-              mautrix-webhook
+              mautrix-webhook-static
               pkgs.cacert
             ];
             pathsToLink = [ "/bin" "/etc" ];
@@ -170,7 +175,6 @@
             go
             gcc
             pkg-config
-            olm
             sqlite
           ];
 

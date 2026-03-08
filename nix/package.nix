@@ -1,7 +1,6 @@
 {
   lib,
   buildGoModule,
-  olm,
 }:
 
 buildGoModule {
@@ -14,7 +13,10 @@ buildGoModule {
 
   env.CGO_ENABLED = "1";
 
-  buildInputs = [ olm ];
+  # goolm: pure-Go OLM implementation — no libolm CGO dependency.
+  # go-sqlite3 still requires CGO but compiles sqlite3.c in-tree with no
+  # external shared libraries, so the binary can be linked fully statically.
+  tags = [ "goolm" ];
 
   subPackages = [ "cmd/mautrix-simplex" ];
 
