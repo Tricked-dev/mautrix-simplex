@@ -46,6 +46,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Test bridge Docker image
+        run: |
+          nix run .#dockerImage.copyToDockerDaemon
+          docker run --rm mautrix-simplex:latest /bin/mautrix-simplex --help
+
+      - name: Test webhook Docker image
+        run: |
+          nix run .#dockerImageWebhook.copyToDockerDaemon
+          docker run --rm mautrix-webhook:latest /bin/mautrix-webhook --help
+
       - name: Build and push bridge Docker images
         run: |
           REPO="${{ github.repository }}"

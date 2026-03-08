@@ -30,6 +30,57 @@
         mautrix-simplex = pkgs.callPackage ./nix/package.nix { };
         bbctl = pkgs.callPackage ./nix/bbctl.nix { };
         mautrix-webhook = pkgs.callPackage ./nix/webhook-package.nix { };
+        # Minimal ffmpeg: keeps only ffmpeg's internal decoders (h264, hevc, vp8/9,
+        # av1, etc. are built into libavcodec without external libraries) and the
+        # built-in mjpeg encoder for thumbnail output. All heavy external codec
+        # libraries (libx264, libx265, libvpx, libopus, libvorbis, libass…) are
+        # removed, cutting the Nix closure size dramatically.
+        minimalFfmpeg = (pkgs.ffmpeg-headless.override {
+          withAmf = false;
+          withAom = false;
+          withAss = false;
+          withBluray = false;
+          withCudaLLVM = false;
+          withCuvid = false;
+          withDrm = false;
+          withFontconfig = false;
+          withFreetype = false;
+          withFribidi = false;
+          withGnutls = false;
+          withMp3lame = false;
+          withNvcodec = false;
+          withOpencl = false;
+          withOpenjpeg = false;
+          withOpenmpt = false;
+          withOpus = false;
+          withSoxr = false;
+          withSrt = false;
+          withSsh = false;
+          withSvtav1 = false;
+          withTheora = false;
+          withVidStab = false;
+          withVorbis = false;
+          withVpx = false;
+          withVulkan = false;
+          withWebp = false;
+          withX264 = false;
+          withX265 = false;
+          withXvid = false;
+          withZimg = false;
+          buildFfplay = false;
+          buildAvdevice = false;
+          buildPostproc = false;
+        }).overrideAttrs (old: {
+          configureFlags = (old.configureFlags or [ ]) ++ [
+            "--disable-encoders"
+            "--enable-encoder=mjpeg"
+            "--disable-muxers"
+            "--enable-muxer=image2"
+            "--disable-protocols"
+            "--enable-protocol=file"
+            "--disable-bsfs"
+          ];
+        });
         dockerImage = n2c.buildImage {
           name = "mautrix-simplex";
           tag = "latest";
@@ -38,7 +89,7 @@
             paths = [
               mautrix-simplex
               pkgs.cacert
-              pkgs.ffmpeg
+              minimalFfmpeg
             ];
             pathsToLink = [ "/bin" "/etc" ];
           };
@@ -59,7 +110,7 @@
               mautrix-simplex
               simplex-chat
               pkgs.cacert
-              pkgs.ffmpeg
+              minimalFfmpeg
             ];
             pathsToLink = [ "/bin" "/etc" ];
           };
@@ -110,7 +161,7 @@
       in
       {
         packages = {
-          inherit mautrix-simplex mautrix-webhook simplex-chat bbctl dockerImage dockerImageBundled dockerImageSimplex dockerImageWebhook;
+          inherit mautrix-simplex mautrix-webhook simplex-chat bbctl minimalFfmpeg dockerImage dockerImageBundled dockerImageSimplex dockerImageWebhook;
           default = mautrix-simplex;
         };
 

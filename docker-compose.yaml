@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   mautrix-simplex:
-    build: .
+    image: ghcr.io/tricked-dev/mautrix-simplex:latest
     depends_on:
       - simplex-chat
     volumes:
