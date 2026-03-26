@@ -163,7 +163,8 @@ func (s *SimplexClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.M
 	if composed.FileSource == nil && composed.MsgContent.Type == "text" {
 		if uri := extractFirstURL(composed.MsgContent.Text); uri != "" {
 			zerolog.Ctx(ctx).Debug().Str("uri", uri).Msg("Fetching link preview for outgoing message")
-			if preview := fetchLinkPreview(ctx, s.Main.linkPreviewClient, uri); preview != nil {
+			tmpDir := filepath.Join(s.Main.Config.FilesFolder, "tmp")
+		if preview := fetchLinkPreview(ctx, s.Main.linkPreviewClient, uri, tmpDir); preview != nil {
 				composed.MsgContent = simplexclient.MakeMsgContentLink(composed.MsgContent.Text, preview)
 			}
 		}
@@ -306,37 +307,88 @@ func (s *SimplexClient) HandleMatrixMessageRemove(ctx context.Context, msg *brid
 }
 
 // ffmpegThumbnailBase64 generates a small JPEG thumbnail from a media file using
-// ffmpeg and returns it as a base64 data URI. The thumbnail is kept tiny (max 64px)
-// at low quality so the base64 fits within SimpleX's ~16KB message size limit.
-// Returns empty string on failure.
+// ffmpeg (resize with lanczos) + MozJPEG cjpeg (encode). Falls back to ffmpeg-only
+// if cjpeg is unavailable. Tries progressively smaller sizes until the result fits
+// within SimpleX's message size budget. Returns empty string on failure.
 func ffmpegThumbnailBase64(ctx context.Context, filePath string) string {
 	log := zerolog.Ctx(ctx)
+	bmpPath := filePath + ".thumb.bmp"
 	thumbPath := filePath + ".thumb.jpg"
+	defer os.Remove(bmpPath)
 	defer os.Remove(thumbPath)
 
-	// Extract a single frame, scale to max 256px, encode as low quality JPEG.
-	// SimpleX has a ~16KB message size limit and the thumbnail is embedded as
-	// base64 inside the JSON payload, so aim for ~6-10KB base64 (q:v 10).
-	// A larger but compressed image gives a better preview than a tiny sharp one.
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-i", filePath,
-		"-vframes", "1",
-		"-vf", "scale='min(256,iw)':'min(256,ih)':force_original_aspect_ratio=decrease",
-		"-q:v", "10",
-		"-y",
-		thumbPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Msg("ffmpeg thumbnail generation failed")
-		return ""
+	// SimpleX msg limit is ~15.6KB encoded; with compression the budget for
+	// the image base64 is roughly 10KB raw (~13KB base64).
+	const maxThumbBytes = 9500
+
+	// Try progressively smaller thumbnails until one fits.
+	// MozJPEG quality scale: 0-100 (higher = better). ffmpeg q:v scale: 2-31 (lower = better).
+	type attempt struct {
+		scale      string
+		mozQuality string // cjpeg -quality
+		ffmpegQV   string // ffmpeg -q:v fallback
+	}
+	attempts := []attempt{
+		{"min(320,iw)':'min(320,ih)", "55", "10"},
+		{"min(256,iw)':'min(256,ih)", "55", "12"},
+		{"min(192,iw)':'min(192,ih)", "60", "8"},
+		{"min(128,iw)':'min(128,ih)", "65", "8"},
 	}
 
-	thumbData, err := os.ReadFile(thumbPath)
-	if err != nil || len(thumbData) == 0 {
-		return ""
+	hasCjpeg := false
+	if _, err := exec.LookPath("cjpeg"); err == nil {
+		hasCjpeg = true
 	}
 
-	return "data:image/jpg;base64," + base64.StdEncoding.EncodeToString(thumbData)
+	for i, a := range attempts {
+		if hasCjpeg {
+			// Resize with ffmpeg (lanczos) to BMP, then encode with MozJPEG
+			cmd := exec.CommandContext(ctx, "ffmpeg",
+				"-i", filePath,
+				"-vframes", "1",
+				"-vf", "scale='"+a.scale+"':force_original_aspect_ratio=decrease:flags=lanczos",
+				"-map_metadata", "-1",
+				"-y", bmpPath,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log.Warn().Err(err).Str("output", string(out)).Msg("ffmpeg resize failed")
+				return ""
+			}
+			cmd2 := exec.CommandContext(ctx, "cjpeg", "-quality", a.mozQuality, "-optimize", "-outfile", thumbPath, bmpPath)
+			if out, err := cmd2.CombinedOutput(); err != nil {
+				log.Debug().Err(err).Str("output", string(out)).Msg("cjpeg failed, falling back to ffmpeg")
+				hasCjpeg = false
+				// Fall through to ffmpeg-only below
+			}
+		}
+
+		if !hasCjpeg {
+			// Fallback: ffmpeg-only encoding
+			cmd := exec.CommandContext(ctx, "ffmpeg",
+				"-i", filePath,
+				"-vframes", "1",
+				"-vf", "scale='"+a.scale+"':force_original_aspect_ratio=decrease:flags=lanczos",
+				"-q:v", a.ffmpegQV,
+				"-map_metadata", "-1",
+				"-y", thumbPath,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log.Warn().Err(err).Str("output", string(out)).Msg("ffmpeg thumbnail failed")
+				return ""
+			}
+		}
+
+		thumbData, err := os.ReadFile(thumbPath)
+		if err != nil || len(thumbData) == 0 {
+			return ""
+		}
+
+		if len(thumbData) <= maxThumbBytes || i == len(attempts)-1 {
+			return "data:image/jpg;base64," + base64.StdEncoding.EncodeToString(thumbData)
+		}
+		log.Debug().Int("thumb_bytes", len(thumbData)).Msg("Thumbnail too large, retrying smaller")
+	}
+	return ""
 }
 
 var urlRe = regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -369,12 +421,23 @@ func extractOGTag(html, prop string) string {
 
 // fetchLinkPreview fetches the page at uri and extracts OG metadata plus a
 // thumbnail image. Returns nil if no useful data could be retrieved.
-func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *simplexclient.LinkPreview {
+func fetchLinkPreview(ctx context.Context, client *http.Client, uri string, tmpDir string) *simplexclient.LinkPreview {
+	log := zerolog.Ctx(ctx)
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+	// Use fxtwitter for x.com/twitter.com URLs — provides better og:image quality
+	fetchURI := uri
+	if strings.Contains(fetchURI, "://x.com/") {
+		fetchURI = strings.Replace(fetchURI, "://x.com/", "://fxtwitter.com/", 1)
+	} else if strings.Contains(fetchURI, "://twitter.com/") {
+		fetchURI = strings.Replace(fetchURI, "://twitter.com/", "://fxtwitter.com/", 1)
+	}
+	log.Debug().Str("fetch_uri", fetchURI).Str("original_uri", uri).Msg("Fetching link preview page")
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fetchURI, nil)
 	if err != nil {
+		log.Warn().Err(err).Str("uri", fetchURI).Msg("Failed to create link preview request")
 		return nil
 	}
 	req.Header.Set("User-Agent", "TelegramBot (like TwitterBot)")
@@ -382,16 +445,18 @@ func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *sim
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Warn().Err(err).Str("uri", fetchURI).Msg("Failed to fetch link preview page")
 		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("uri", fetchURI).Msg("Link preview page returned non-200")
 		return nil
 	}
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/html") && !strings.Contains(ct, "xhtml") {
-		return nil
+		log.Warn().Str("content_type", ct).Str("uri", fetchURI).Msg("Link preview page not HTML")
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
@@ -407,8 +472,10 @@ func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *sim
 		}
 	}
 	if title == "" {
+		log.Warn().Str("uri", fetchURI).Msg("No title found in link preview page")
 		return nil
 	}
+	log.Debug().Str("title", title).Str("og_image", extractOGTag(page, "og:image")).Msg("Extracted link preview metadata")
 
 	preview := &simplexclient.LinkPreview{
 		URI:         uri,
@@ -418,7 +485,7 @@ func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *sim
 
 	// Fetch the og:image and generate a thumbnail via ffmpeg.
 	if imgURL := extractOGTag(page, "og:image"); imgURL != "" {
-		if thumb := fetchURLThumbnailBase64(ctx, client, imgURL); thumb != "" {
+		if thumb := fetchURLThumbnailBase64(ctx, client, imgURL, tmpDir); thumb != "" {
 			preview.Image = thumb
 		}
 	}
@@ -428,26 +495,39 @@ func fetchLinkPreview(ctx context.Context, client *http.Client, uri string) *sim
 
 // fetchURLThumbnailBase64 downloads an image URL, writes it to a temp file,
 // and returns a base64 thumbnail the same way ffmpegThumbnailBase64 does.
-func fetchURLThumbnailBase64(ctx context.Context, client *http.Client, imgURL string) string {
+func fetchURLThumbnailBase64(ctx context.Context, client *http.Client, imgURL string, tmpDir string) string {
+	log := zerolog.Ctx(ctx)
+	log.Debug().Str("img_url", imgURL).Str("tmp_dir", tmpDir).Msg("Fetching link preview image")
+
 	req, err := http.NewRequestWithContext(ctx, "GET", imgURL, nil)
 	if err != nil {
+		log.Warn().Err(err).Str("img_url", imgURL).Msg("Failed to create request for preview image")
 		return ""
 	}
 	req.Header.Set("User-Agent", "TelegramBot (like TwitterBot)")
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Warn().Err(err).Str("img_url", imgURL).Msg("Failed to download preview image")
 		return ""
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
-	if err != nil || len(data) == 0 {
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("img_url", imgURL).Msg("Preview image download returned non-200")
 		return ""
 	}
 
-	tmp, err := os.CreateTemp("", "preview-img-*")
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil || len(data) == 0 {
+		log.Warn().Err(err).Int("data_len", len(data)).Str("img_url", imgURL).Msg("Failed to read preview image body")
+		return ""
+	}
+	log.Debug().Int("data_len", len(data)).Str("content_type", resp.Header.Get("Content-Type")).Msg("Downloaded preview image")
+
+	tmp, err := os.CreateTemp(tmpDir, "preview-img-*")
 	if err != nil {
+		log.Warn().Err(err).Str("tmp_dir", tmpDir).Msg("Failed to create temp file for preview image")
 		return ""
 	}
 	tmpPath := tmp.Name()
@@ -455,9 +535,16 @@ func fetchURLThumbnailBase64(ctx context.Context, client *http.Client, imgURL st
 
 	if _, err = tmp.Write(data); err != nil {
 		tmp.Close()
+		log.Warn().Err(err).Str("path", tmpPath).Msg("Failed to write preview image temp file")
 		return ""
 	}
 	tmp.Close()
 
-	return ffmpegThumbnailBase64(ctx, tmpPath)
+	thumb := ffmpegThumbnailBase64(ctx, tmpPath)
+	if thumb == "" {
+		log.Warn().Str("path", tmpPath).Msg("ffmpeg thumbnail returned empty for preview image")
+	} else {
+		log.Debug().Int("thumb_len", len(thumb)).Msg("Generated preview image thumbnail")
+	}
+	return thumb
 }

@@ -200,7 +200,7 @@ in
           Type = "simple";
           WorkingDirectory = dataDir;
           ExecStart = "${cfg.package}/bin/mautrix-simplex -c ${settingsFile} --no-update";
-          Environment = "PATH=${lib.makeBinPath [ pkgs.ffmpeg-headless ]}:/run/current-system/sw/bin";
+          Environment = "PATH=${lib.makeBinPath [ pkgs.ffmpeg-headless pkgs.mozjpeg ]}:/run/current-system/sw/bin";
           Restart = "on-failure";
           RestartSec = 5;
           ReadWritePaths = [ dataDir ];

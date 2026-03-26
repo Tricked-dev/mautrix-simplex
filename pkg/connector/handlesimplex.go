@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mime"
@@ -200,8 +201,8 @@ func (s *SimplexClient) handleNewChatItems(ctx context.Context, data simplexclie
 			TransactionID: txnID,
 			ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data *simplexclient.ChatItem) (*bridgev2.ConvertedMessage, error) {
 				cm := convertChatItemToMatrix(data)
-				// If a file part needs to be uploaded, do it now.
 				for _, part := range cm.Parts {
+					// Upload file attachments
 					if filePath, ok := part.Extra["fi.mau.simplex.file_path"].(string); ok {
 						delete(part.Extra, "fi.mau.simplex.file_path")
 						filePath = s.resolveSimplexFilePath(filePath)
@@ -211,6 +212,20 @@ func (s *SimplexClient) handleNewChatItems(ctx context.Context, data simplexclie
 								MsgType: event.MsgNotice,
 								Body:    "[File transfer failed: " + err.Error() + "]",
 							}
+						}
+					}
+					// Upload link preview images and set on BeeperLinkPreview
+					if imgData, ok := part.Extra["fi.mau.simplex.link_preview_image"].([]byte); ok {
+						delete(part.Extra, "fi.mau.simplex.link_preview_image")
+						mimeType := http.DetectContentType(imgData)
+						uri, encFile, err := intent.UploadMedia(ctx, portal.MXID, imgData, "preview.jpg", mimeType)
+						if err == nil && len(part.Content.BeeperLinkPreviews) > 0 {
+							part.Content.BeeperLinkPreviews[0].ImageURL = uri
+							part.Content.BeeperLinkPreviews[0].ImageEncryption = encFile
+							part.Content.BeeperLinkPreviews[0].ImageType = mimeType
+							part.Content.BeeperLinkPreviews[0].ImageSize = event.IntOrString(len(imgData))
+						} else if err != nil {
+							zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to upload link preview image")
 						}
 					}
 				}
@@ -244,8 +259,10 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 		_ = json.Unmarshal(item.Content.MsgContent, &mc)
 	}
 
-	// For link-type messages, render as a formatted text message with title
-	// and description (preview images are not bridged to Matrix).
+	// For link-type messages, use BeeperLinkPreviews (MSC4095) for proper
+	// URL preview embeds, matching how other mautrix bridges handle this.
+	var beeperLinkPreviews []*event.BeeperLinkPreview
+	var linkPreviewImageData []byte
 	if mc.Type == "link" && mc.Preview != nil {
 		preview := mc.Preview
 		if !strings.Contains(body, preview.URI) {
@@ -255,13 +272,24 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 				body = preview.URI
 			}
 		}
-		var htmlBuf strings.Builder
-		fmt.Fprintf(&htmlBuf, `<strong><a href="%s">%s</a></strong>`,
-			escapeHTML(preview.URI), escapeHTML(preview.Title))
-		if preview.Description != "" {
-			fmt.Fprintf(&htmlBuf, "<br><em>%s</em>", escapeHTML(preview.Description))
+
+		beeperLinkPreviews = []*event.BeeperLinkPreview{{
+			MatchedURL: preview.URI,
+			LinkPreview: event.LinkPreview{
+				CanonicalURL: preview.URI,
+				Title:        preview.Title,
+				Description:  preview.Description,
+			},
+		}}
+
+		// Decode base64 preview image for upload
+		if preview.Image != "" {
+			if idx := strings.Index(preview.Image, ","); idx >= 0 {
+				if decoded, err := base64.StdEncoding.DecodeString(preview.Image[idx+1:]); err == nil && len(decoded) > 0 {
+					linkPreviewImageData = decoded
+				}
+			}
 		}
-		html = htmlBuf.String()
 	}
 
 	if item.Meta.ItemDeleted != nil {
@@ -324,12 +352,18 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 	}
 
 	content := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    body,
+		MsgType:            event.MsgText,
+		Body:               body,
+		BeeperLinkPreviews: beeperLinkPreviews,
 	}
 	if html != "" {
 		content.Format = event.FormatHTML
 		content.FormattedBody = html
+	}
+
+	extra := map[string]any{}
+	if linkPreviewImageData != nil {
+		extra["fi.mau.simplex.link_preview_image"] = linkPreviewImageData
 	}
 
 	return &bridgev2.ConvertedMessage{
@@ -338,7 +372,7 @@ func convertChatItemToMatrix(item *simplexclient.ChatItem) *bridgev2.ConvertedMe
 			ID:      networkid.PartID(""),
 			Type:    event.EventMessage,
 			Content: content,
-			Extra:   map[string]any{},
+			Extra:   extra,
 		}},
 	}
 }
